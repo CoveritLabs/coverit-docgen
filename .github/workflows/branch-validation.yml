@@ -1,0 +1,14 @@
+# Copyright (c) 2026 CoverIt Labs. All Rights Reserved.
+# Proprietary and confidential. Unauthorized use is strictly prohibited.
+# See LICENSE file in the project root for full license information.
+
+name: Branch validation
+
+on:
+  pull_request:
+    types: [opened]
+    branches: [main, develop]
+
+jobs:
+  validate-branch:
+    uses: CoveritLabs/.github/.github/workflows/branch-validation.yml@main

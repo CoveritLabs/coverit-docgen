@@ -1,0 +1,7 @@
+#!/bin/sh
+
+# license header injection
+npx coverit-add-license-header
+
+# branch name validation
+npx coverit-validate-branch

@@ -1,0 +1,32 @@
+# Copyright (c) 2026 CoverIt Labs. All Rights Reserved.
+# Proprietary and confidential. Unauthorized use is strictly prohibited.
+# See LICENSE file in the project root for full license information.
+
+name: Docker
+
+on:
+  push:
+    branches: [main, develop]
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - ".github/**"
+      - ".husky/**"
+      - ".vscode/**"
+  pull_request:
+    branches: [main, develop]
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - ".github/**"
+      - ".husky/**"
+      - ".vscode/**"
+  release:
+    types: [published]
+
+jobs:
+  docker:
+    uses: CoveritLabs/.github/.github/workflows/docker-build.yml@main
+    with:
+      image-name: coveritlabs/coverit-frontend
+    secrets: inherit
