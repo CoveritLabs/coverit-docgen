@@ -1,0 +1,17 @@
+# Copyright (c) 2026 CoverIt Labs. All Rights Reserved.
+# Proprietary and confidential. Unauthorized use is strictly prohibited.
+# See LICENSE file in the project root for full license information.
+
+# Cloud override — points API at cloud db/redis (e.g. Aiven).
+# Requires DATABASE_URL, REDIS_URL, and JWT_SECRET in .env.
+#
+# Used by:
+#   ./docker.sh up             → remote image + cloud
+#   ./docker.sh up --test-prod → local prod build + cloud
+
+services:
+  api:
+    depends_on: []
+
+  worker:
+    depends_on: []

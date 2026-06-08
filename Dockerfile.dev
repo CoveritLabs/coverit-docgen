@@ -1,0 +1,24 @@
+# Build stage for development
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install system dependencies (required for asyncpg to compile if needed)
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends gcc libpq-dev && \
+    rm -rf /var/lib/apt/lists/*
+
+# Copy configuration
+COPY pyproject.toml ./
+
+# Install dependencies in editable mode
+RUN pip install --no-cache-dir -e .
+
+# Source code will be mounted at runtime via docker-compose
+ENV ENVIRONMENT=development
+ENV PYTHONUNBUFFERED=1
+
+EXPOSE 8000
+
+# uvicorn runs the FastAPI app with hot-reloading
+CMD ["uvicorn", "src.main:create_app", "--host", "0.0.0.0", "--port", "8000", "--factory", "--reload"]

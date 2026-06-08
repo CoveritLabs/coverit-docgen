@@ -1,0 +1,72 @@
+# Copyright (c) 2026 CoverIt Labs. All Rights Reserved.
+name: coverit-docgen
+
+services:
+  api:
+    image: ghcr.io/coveritlabs/coverit-docgen:${API_TAG:-dev}
+    build:
+      context: ${API_DIR}
+    pull_policy: always  
+    container_name: docgen-api
+    ports:
+      - "8000:8000"
+    environment:
+      - ENVIRONMENT=${ENVIRONMENT:-development}
+      - DATABASE_URL=${DATABASE_URL:-postgresql+asyncpg://postgres:postgres@db:5432/coverit}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379}
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  worker:
+    image: ghcr.io/coveritlabs/coverit-docgen:${API_TAG:-dev}
+    build:
+      context: ${API_DIR}
+    pull_policy: always
+    container_name: docgen-worker
+    environment:
+      - ENVIRONMENT=${ENVIRONMENT:-development}
+      - DATABASE_URL=${DATABASE_URL:-postgresql+asyncpg://postgres:postgres@db:5432/coverit}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379}
+    depends_on:
+      redis:
+        condition: service_healthy
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    command: ["arq", "worker.WorkerSettings"] 
+
+  db:
+    image: postgres:18
+    container_name: docgen-postgres
+    environment:
+      - POSTGRES_USER=${DB_USER:-postgres}
+      - POSTGRES_PASSWORD=${DB_PASSWORD:-postgres}
+      - POSTGRES_DB=${DB_NAME:-coverit}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: docgen-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:
