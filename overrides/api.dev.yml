@@ -9,8 +9,6 @@ services:
 
   worker:
     image: coverit-docgen-dev-local
-    build:
-      dockerfile: Dockerfile.dev
     volumes:
       - ./src:/app/src
       - ./worker.py:/app/worker.py

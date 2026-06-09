@@ -17,5 +17,3 @@ services:
 
   worker:
     image: coverit-docgen-test-local
-    build:
-      dockerfile: Dockerfile
