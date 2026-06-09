@@ -14,7 +14,6 @@ COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev
 
 COPY src ./src
-COPY worker.py ./worker.py
 
 # Runtime
 FROM python:3.11-slim
