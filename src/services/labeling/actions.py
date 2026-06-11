@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from typing import Optional
 from bs4 import Tag
 from src.services.labeling.constants import TEXT_INPUT_TYPES
-from src.services.labeling.naming import get_name_from_text
+from src.services.labeling.labeling import Labeling
 from src.utils.html_tools import (
     get_input_value,
     get_select_value,
@@ -76,7 +76,7 @@ class ActionDescription:
             image_only=has_img and not has_text,
             input_value=get_input_value(el),
             select_value=get_select_value(el),
-            textarea_value=get_name_from_text(el),
+            textarea_value=Labeling.get_name_from_text(el),
         )
 
     def _image_description(self, context: ActionContext) -> str:

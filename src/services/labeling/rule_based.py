@@ -7,8 +7,8 @@ from src.models.graph import (
 )
 from src.utils.html_tools import clean_element
 from src.services.labeling.page_analyzer import get_page_info
-from src.services.labeling.naming import get_element_name
-from src.services.labeling.actions import get_action_description
+from src.services.labeling.labeling import Labeling
+from src.services.labeling.actions import ActionDescription
 
 
 def label_crawler_state(state: CrawlerState) -> LabeledState:
@@ -26,6 +26,8 @@ def label_crawler_state(state: CrawlerState) -> LabeledState:
 def label_crawler_transition(transition: CrawlerTransition) -> LabeledElement:
     state = transition.from_state
     soup = BeautifulSoup(state.html, "html.parser")
+    descriptor = ActionDescription()
+    labeler = Labeling()
 
     pressed_element_id = str(transition.pressed_element.id)
     bs4_element = soup.find(attrs={"data-doc-id": pressed_element_id})
@@ -46,8 +48,8 @@ def label_crawler_transition(transition: CrawlerTransition) -> LabeledElement:
         bbox_data = bbox_lookup.get(current_id)
         mapped_visual_elements.append({"element": el, "bbox": bbox_data})
 
-    name = get_element_name(bs4_element, mapped_visual_elements)
-    action = get_action_description(bs4_element, name)
+    name = labeler.get_element_name(bs4_element, mapped_visual_elements)
+    action = descriptor.get_action_description(bs4_element, name)
 
     return LabeledElement(
         element_id=pressed_element_id,
