@@ -1,124 +1,163 @@
-from bs4 import NavigableString, Tag
+from dataclasses import dataclass
+from typing import Optional
+from bs4 import Tag
 from src.services.labeling.constants import TEXT_INPUT_TYPES
-from src.utils.html_tools import is_readable
 from src.services.labeling.naming import get_name_from_text
+from src.utils.html_tools import (
+    get_input_value,
+    get_select_value,
+    is_readable,
+)
 
 
-def get_input_value(el):
-    if el is None or isinstance(el, NavigableString):
-        return None
-    val = el.get("value", "")
-    if isinstance(val, str):
-        val = val.strip()
-        if val and is_readable(val):
-            return val
-    return None
+@dataclass(frozen=True)
+class ActionContext:
+    """Information extracted from an HTML element."""
+
+    el: Tag
+    name: str
+    tag: str
+    el_type: str
+    role: str
+    in_nav: bool
+    image_only: bool
+    input_value: Optional[str]
+    select_value: Optional[str]
+    textarea_value: Optional[str]
 
 
-def get_select_value(el):
-    """Get the selected option's text from a <select> element."""
-    if el is None or not isinstance(el, Tag):
-        return None
-    selected = el.find("option", selected=True)
-    if selected:
-        text = selected.get_text(strip=True)
-        if text and is_readable(text):
-            return text
-    # Fallback: first option
-    first = el.find("option")
-    if first:
-        text = first.get_text(strip=True)
-        if text and is_readable(text):
-            return text
-    return None
+class ActionDescription:
+    """Generates human-readable action descriptions for HTML elements."""
 
+    INPUT_MAP = {
+        "checkbox": lambda name: f'Toggle "{name}"',
+        "switch": lambda name: f'Toggle "{name}"',
+        "radio": lambda name: f'Select "{name}"',
+        "option": lambda name: f'Select "{name}"',
+        "link": lambda name: f'Go to "{name}"',
+        "file": lambda name: f'Upload "{name}"',
+        "tab": lambda name: f'Switch to "{name}" tab',
+        "menuitem": lambda name: f'Click on "{name}" menu item',
+    }
 
-def get_action_description(el, name):
-    if not name:
-        return None
+    def _build_context(self, el: Tag, name: str) -> ActionContext:
+        """Build an ActionContext from a BeautifulSoup element."""
 
-    tag = el.name.lower()
-    el_type = (el.get("type", "") or "").lower()
-    role = (el.get("role", "") or "").lower()
+        if el is None:
+            raise ValueError("el cannot be None")
 
-    in_nav = any(p.name == "nav" for p in el.parents if p and p.name)
-    has_img = el.find("img") is not None if isinstance(el, Tag) else False
+        if not isinstance(el, Tag):
+            raise TypeError(f"Expected BeautifulSoup Tag, got {type(el).__name__}")
 
-    has_text = False
-    if isinstance(el, Tag):
-        for s in el.stripped_strings:
-            if is_readable(s):
-                has_text = True
-                break
+        if not isinstance(name, str):
+            raise TypeError(f"Expected name to be str, got {type(name).__name__}")
 
-    if tag == "a":
-        if has_img and not has_text:
-            return f'Click on image "{name}"'
-        if in_nav:
-            return f'Navigate to "{name}"'
-        return f'Go to "{name}"'
+        if not name.strip():
+            raise ValueError("name cannot be empty")
 
-    if tag == "button" or role == "button" or el_type in ("submit", "button"):
-        if has_img and not has_text:
-            return f'Click on image "{name}"'
-        return f'Click "{name}"'
+        tag = (el.name or "").lower()
+        el_type = (el.get("type", "") or "").lower()
+        role = (el.get("role", "") or "").lower()
 
-    if tag == "input" and el_type in TEXT_INPUT_TYPES:
-        value = get_input_value(el)
-        field_name = name
-        if value and field_name:
-            if el_type == "search":
-                return f'Search for "{value}" in "{field_name}"'
-            return f'Enter "{value}" in "{field_name}"'
-        if value:
-            if el_type == "search":
-                return f'Search for "{value}"'
-            return f'Enter "{value}"'
-        if field_name:
-            if el_type == "search":
-                return f'Search "{field_name}"'
-            return f'Enter "{field_name}"'
-        return f'Enter "{name}"'
+        in_nav = any(
+            parent.name == "nav" for parent in el.parents if parent and parent.name
+        )
 
-    if tag == "input":
-        if el_type == "checkbox":
-            return f'Toggle "{name}"'
-        if el_type == "radio":
-            return f'Select "{name}"'
-        if el_type == "file":
-            return f'Upload "{name}"'
-        return f'Enter "{name}"'
+        has_img = el.find("img") is not None
+        has_text = any(is_readable(text) for text in el.stripped_strings)
 
-    if tag == "textarea":
-        value = get_name_from_text(el)
-        field_name = name
-        if value and field_name:
-            return f'Type "{value}" in "{field_name}"'
-        if value:
-            return f'Type "{value}"'
-        if field_name:
-            return f'Type in "{field_name}"'
-        return f'Type in "{name}"'
+        return ActionContext(
+            el=el,
+            name=name,
+            tag=tag,
+            el_type=el_type,
+            role=role,
+            in_nav=in_nav,
+            image_only=has_img and not has_text,
+            input_value=get_input_value(el),
+            select_value=get_select_value(el),
+            textarea_value=get_name_from_text(el),
+        )
 
-    if tag == "select":
-        value = get_select_value(el)
-        if value and name:
-            return f'Select "{value}" from "{name}"'
-        if value:
-            return f'Select "{value}"'
-        return f'Select from "{name}"'
+    def _image_description(self, context: ActionContext) -> str:
+        return f'Click on image "{context.name}"'
 
-    if role == "tab":
-        return f'Switch to "{name}" tab'
-    if role == "menuitem":
-        return f'Click on "{name}" menu item'
-    if role in ("switch", "checkbox"):
-        return f'Toggle "{name}"'
-    if role in ("radio", "option"):
-        return f'Select "{name}"'
-    if role == "link":
-        return f'Go to "{name}"'
+    def _anchor_description(self, context: ActionContext) -> str:
+        if context.image_only:
+            return self._image_description(context)
 
-    if has_img and not has_text:
-        return f'Click on image "{name}"'
-    return f'Click "{name}"'
+        if context.in_nav:
+            return f'Navigate to "{context.name}"'
+
+        return f'Go to "{context.name}"'
+
+    def _button_description(self, context: ActionContext) -> str:
+        if context.image_only:
+            return self._image_description(context)
+
+        return f'Click "{context.name}"'
+
+    def _text_input_description(self, context: ActionContext) -> str:
+        if context.input_value:
+            if context.el_type == "search":
+                return f'Search for "{context.input_value}" ' f'in "{context.name}"'
+
+            return f'Enter "{context.input_value}" ' f'in "{context.name}"'
+
+        if context.el_type == "search":
+            return f'Search "{context.name}"'
+
+        return f'Enter "{context.name}"'
+
+    def _input_description(self, context: ActionContext) -> str:
+        if context.el_type in self.INPUT_MAP:
+            return self.INPUT_MAP[context.el_type](context.name)
+
+        return f'Enter "{context.name}"'
+
+    def _select_description(self, context: ActionContext) -> str:
+        if context.select_value:
+            return f'Select "{context.select_value}" ' f'from "{context.name}"'
+
+        return f'Select from "{context.name}"'
+
+    def _textarea_description(self, context: ActionContext) -> str:
+        if context.textarea_value:
+            return f'Type "{context.textarea_value}" ' f'in "{context.name}"'
+
+        return f'Type in "{context.name}"'
+
+    def get_action_description(self, el: Tag, name: str) -> str:
+        """Return a human-readable action description for an element."""
+
+        context = self._build_context(el, name)
+
+        if context.tag == "a":
+            return self._anchor_description(context)
+
+        if (
+            context.tag == "button"
+            or context.role == "button"
+            or context.el_type in ("submit", "button")
+        ):
+            return self._button_description(context)
+
+        if context.tag == "input":
+            if context.el_type in TEXT_INPUT_TYPES:
+                return self._text_input_description(context)
+
+            return self._input_description(context)
+
+        if context.tag == "textarea":
+            return self._textarea_description(context)
+
+        if context.tag == "select":
+            return self._select_description(context)
+
+        if context.role in self.INPUT_MAP:
+            return self.INPUT_MAP[context.role](context.name)
+
+        if context.image_only:
+            return self._image_description(context)
+
+        return f'Click "{context.name}"'
