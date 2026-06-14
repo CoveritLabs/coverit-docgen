@@ -22,17 +22,17 @@ async def handle_locator(html: str, locator: str):
         browser = await p.chromium.launch(headless=True)
         page = await browser.new_page()
         await page.set_content(html)
-        
+
         element = page.locator(locator).first
 
         unique_id = f"pw-bridge-{uuid.uuid4().hex[:8]}"
-        
+
         await element.evaluate(
             f'(node) => node.setAttribute("data-pw-locator", "{unique_id}")'
         )
         modified_html = await page.content()
         await browser.close()
-        
+
     return modified_html, unique_id
 
 

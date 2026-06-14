@@ -51,10 +51,10 @@ fi
 
 case "$CMD" in
   up)
-    $EXEC_CMD up --build -d
+    $EXEC_CMD up --build -d --remove-orphans
     ;;
   down)
-    $EXEC_CMD down
+    $EXEC_CMD down --remove-orphans
     ;;
   logs)
     $EXEC_CMD logs -f

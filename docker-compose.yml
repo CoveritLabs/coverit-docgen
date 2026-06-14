@@ -2,32 +2,6 @@
 name: coverit-docgen
 
 services:
-  api:
-    image: ghcr.io/coveritlabs/coverit-docgen:${API_TAG:-dev}
-    build:
-      context: ${API_DIR}
-    pull_policy: always  
-    container_name: docgen-api
-    ports:
-      - "8000:8000"
-    environment:
-      - APP_NAME=${APP_NAME:-DocGen}
-      - DEBUG=${DEBUG:-False}
-      - ENVIRONMENT=${ENVIRONMENT:-development}
-      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-["http://localhost:3000"]}
-      # Database & Services
-      - DATABASE_URL=${DATABASE_URL:-postgresql+asyncpg://postgres:postgres@db:5432/coverit}
-      - REDIS_URL=${REDIS_URL:-redis://redis:6379}
-      - NEO4J_URL=${NEO4J_URL:-bolt://neo4j:7687}
-      - NEO4J_USERNAME=${NEO4J_USERNAME:-neo4j}
-      - NEO4J_PASSWORD=${NEO4J_PASSWORD:-password}
-    depends_on:
-      db:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    restart: unless-stopped
-
   worker:
     image: ghcr.io/coveritlabs/coverit-docgen:${API_TAG:-dev}
     pull_policy: always
@@ -49,7 +23,7 @@ services:
       db:
         condition: service_healthy
     restart: unless-stopped
-    command: ["arq", "src.worker.WorkerSettings"] 
+    command: ["arq", "src.worker.WorkerSettings"]
 
   db:
     image: postgres:18

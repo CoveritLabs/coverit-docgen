@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     neo4j_password: str = "password"
     neo4j_username: str = "neo4j"
 
+    poller_cron_hours: str = "0,4,8,12,16,20"
+    poller_cron_minutes: str = "0"
+
     # CORS
     allowed_origins: list[str] = ["http://localhost:3000"]
 

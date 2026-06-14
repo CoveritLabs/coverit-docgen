@@ -10,10 +10,7 @@
 #   ./docker.sh up --test-prod → local prod build + cloud
 
 services:
-  api:
+  worker:
     image: coverit-docgen-test-local
     build:
       dockerfile: Dockerfile
-
-  worker:
-    image: coverit-docgen-test-local

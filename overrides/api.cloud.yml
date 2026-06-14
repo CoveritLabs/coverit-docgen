@@ -10,8 +10,5 @@
 #   ./docker.sh up --test-prod → local prod build + cloud
 
 services:
-  api:
-    depends_on: []
-
   worker:
     depends_on: []

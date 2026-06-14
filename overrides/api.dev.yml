@@ -1,14 +1,9 @@
 # OVERRIDE: Local Development
 services:
-  api:
+  worker:
     image: coverit-docgen-dev-local
     build:
       dockerfile: Dockerfile.dev
-    volumes:
-      - ./src:/app/src
-
-  worker:
-    image: coverit-docgen-dev-local
     volumes:
       - ./src:/app/src
       - ./worker.py:/app/worker.py

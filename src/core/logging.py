@@ -1,5 +1,6 @@
 import logging
 import logging.config
+from pathlib import Path
 from src.core.config import Settings
 
 
@@ -9,6 +10,9 @@ def setup_logging(settings: Settings) -> None:
     Uses dictionary configuration for clean, predictable output.
     """
 
+    log_dir = Path("logs")
+    log_dir.mkdir(parents=True, exist_ok=True)
+
     log_level = "DEBUG" if settings.debug else "INFO"
 
     logging_config = {
@@ -16,13 +20,10 @@ def setup_logging(settings: Settings) -> None:
         "disable_existing_loggers": False,
         "formatters": {
             "standard": {
-                # Format: [2024-05-12 10:22:34] [INFO] [src.tasks.labeling] - Message
                 "format": "%(asctime)s [%(levelname)s] [%(name)s] - %(message)s",
                 "datefmt": "%Y-%m-%d %H:%M:%S",
             },
             "json": {
-                # In heavily scaled production, you often use JSON formatters here
-                # so tools like Datadog/ELK can parse the logs automatically.
                 "format": '{"time": "%(asctime)s", "level": "%(levelname)s", "logger": "%(name)s", "message": "%(message)s"}'
             },
         },
@@ -30,36 +31,44 @@ def setup_logging(settings: Settings) -> None:
             "console": {
                 "level": log_level,
                 "class": "logging.StreamHandler",
-                "formatter": "standard",  # Switch to 'json' if sending logs to Datadog
+                "formatter": "standard",
                 "stream": "ext://sys.stdout",
+            },
+            "file": {
+                "level": log_level,
+                "class": "logging.handlers.RotatingFileHandler",
+                "formatter": "standard",
+                "filename": "logs/worker.log",  # Saves inside the logs folder
+                "maxBytes": 10485760,  # 10 MB size limit per file
+                "backupCount": 5,  # Keeps the last 5 files (worker.log.1, worker.log.2...)
+                "encoding": "utf-8",
             },
         },
         "loggers": {
-            # Our application logs
             "src": {
-                "handlers": ["console"],
+                "handlers": ["console", "file"],
                 "level": log_level,
                 "propagate": False,
             },
             "api": {
-                "handlers": ["console"],
+                "handlers": ["console", "file"],
                 "level": log_level,
                 "propagate": False,
             },
-            # Third-party loggers (mute their noise)
             "uvicorn.access": {
-                "handlers": ["console"],
-                "level": "WARNING",  # We mute Uvicorn's default access logs because our custom Middleware handles it better
+                "handlers": ["console", "file"],
+                "level": "WARNING",
                 "propagate": False,
             },
             "sqlalchemy.engine": {
-                "handlers": ["console"],
-                "level": "WARNING",  # Change to DEBUG if you want to see all SQL queries
+                "handlers": ["console", "file"],
+                "level": "WARNING",
                 "propagate": False,
             },
         },
         "root": {
-            "handlers": ["console"],
+            # Catch-all for any other loggers
+            "handlers": ["console", "file"],
             "level": "INFO",
         },
     }
