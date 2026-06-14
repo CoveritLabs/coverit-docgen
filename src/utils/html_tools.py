@@ -114,3 +114,15 @@ def get_select_value(el):
         if text and is_readable(text):
             return text
     return None
+
+
+def get_bbox(tag):
+    try:
+        return {
+            "x": float(tag["data-x"]),
+            "y": float(tag["data-y"]),
+            "width": float(tag["data-width"]),
+            "height": float(tag["data-height"]),
+        }
+    except (KeyError, ValueError):
+        return None
