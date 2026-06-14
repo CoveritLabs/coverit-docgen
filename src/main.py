@@ -1,4 +1,3 @@
-# src/main.py
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -6,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from src.core.config import get_settings
 from src.core.database import session_manager
 from src.core.redis import redis_manager
+from src.core.neo import neo_manager
 from src.api.router import api_router
 from src.core.exceptions import register_exception_handlers
 from src.middleware import RequestLoggingMiddleware
@@ -21,13 +21,15 @@ async def lifespan(app: FastAPI):
     setup_logging(settings)
 
     # Startup Connections
-    await session_manager.init(settings.database_url)
+    await session_manager.init()
     await redis_manager.init()
+    neo_manager.init()
     yield
 
     # Shutdown Connections
     await redis_manager.close()
     await session_manager.close()
+    await neo_manager.close()
 
 
 def create_app() -> FastAPI:
@@ -49,7 +51,7 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
- 
+
     app.add_middleware(RequestLoggingMiddleware)
 
     register_exception_handlers(app)

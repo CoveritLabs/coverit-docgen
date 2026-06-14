@@ -24,6 +24,9 @@ class Settings(BaseSettings):
 
     # External Services
     redis_url: str = "redis://redis:6379"
+    neo4j_url: str = "bolt://localhost:7687"
+    neo4j_password: str = "password"
+    neo4j_username: str = "neo4j"
 
     # CORS
     allowed_origins: list[str] = ["http://localhost:3000"]

@@ -1,6 +1,8 @@
 from contextlib import asynccontextmanager
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from src.core.config import get_settings
 
+settings = get_settings()
 
 class DatabaseSessionManager:
     """Manages async database sessions with proper lifecycle."""
@@ -9,9 +11,9 @@ class DatabaseSessionManager:
         self._engine = None
         self._session_maker = None
 
-    async def init(self, database_url: str):
+    async def init(self):
         self._engine = create_async_engine(
-            database_url,
+            settings.database_url,
             pool_size=20,
             max_overflow=10,
             pool_pre_ping=True,
