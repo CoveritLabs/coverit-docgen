@@ -1,6 +1,12 @@
 import math
 from bs4 import NavigableString, Tag, Comment
-from src.utils.html_tools import is_readable, is_interactive, center, get_direction
+from src.utils.html_tools import (
+    is_readable,
+    is_interactive,
+    center,
+    get_bbox,
+    get_direction,
+)
 from src.services.labeling.constants import MAX_DEPTH, NAME_ATTRS
 
 
@@ -190,59 +196,48 @@ class Labeling:
             return None
 
         name = (
-            self.get_name_from_attrs(tag) if is_interactive(tag) else None
-        ) or self.get_name_from_text(tag)
+            self.get_name_from_attrs(tag)
+            if is_interactive(tag)
+            else self.get_name_from_text(tag)
+        )
 
         if name and is_readable(name):
             return {"text": name, "type": tag.get("role") or tag.name or "text"}
 
         return None
 
-    def _get_name_from_context(self, el, visual_elements):
+    def _get_name_from_context(self, el: Tag, root: Tag) -> str | None:
         """
         Generate a contextual name using nearby visual elements.
 
-        If an element cannot be named directly, the nearest labeled
-        visual neighbor is used as a reference point.
-
-        Example:
-            "element to the right of button 'Submit'"
-
-        Args:
-            el: Target HTML element.
-            visual_elements: Elements with bounding-box metadata.
-
-        Returns:
-            A contextual description or None.
+        Uses bounding box attributes stored directly on DOM elements:
+            data-x
+            data-y
+            data-width
+            data-height
         """
+
         self._validate(el)
 
-        # locate target bbox
-        target_data = None
+        target_box = get_bbox(el)
 
-        for item in visual_elements:
-            if item["element"] == el:
-                target_data = item
-                break
-
-        if not target_data:
+        if not target_box:
             return None
 
-        target_box = target_data["bbox"]
         tx, ty = center(target_box)
 
-        # find closest visual neighbor
+        # nearest neighbor
         best = None
         best_score = float("inf")
 
-        for item in visual_elements:
-            other = item["element"]
+        for other in root.find_all(True):
+            if other == el:
+                continue
 
-            if (
-                other == el
-                or other in el.parents
-                or (isinstance(other, Tag) and el in other.parents)
-            ):
+            if other in el.parents:
+                continue
+
+            if isinstance(other, Tag) and el in other.parents:
                 continue
 
             candidate = self._get_candidate_name(other)
@@ -250,7 +245,10 @@ class Labeling:
             if not candidate:
                 continue
 
-            box = item["bbox"]
+            box = get_bbox(other)
+
+            if not box:
+                continue
 
             if box["width"] <= 0 or box["height"] <= 0:
                 continue
@@ -285,7 +283,7 @@ class Labeling:
             f"'{best['text']}'"
         )
 
-    def get_element_name(self, el: Tag, visual_elements: list[dict]) -> str | None:
+    def get_element_name(self, el: Tag, root: Tag) -> str | None:
         """
         Resolve the most descriptive name for an element.
 
@@ -315,4 +313,4 @@ class Labeling:
             if name := fn(el):
                 return name
 
-        return self._get_name_from_context(el, visual_elements)
+        return self._get_name_from_context(el, root)

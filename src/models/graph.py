@@ -1,5 +1,5 @@
-from pydantic import BaseModel
-from typing import Optional, List
+from pydantic import BaseModel, Field
+from typing import Optional, List, Dict
 
 
 class BoundingBox(BaseModel):
@@ -9,32 +9,51 @@ class BoundingBox(BaseModel):
     height: float
 
 
-class VisualElement(BaseModel):
-    id: str  # Maps to data-doc-id in the HTML
-    bbox: BoundingBox
-
-
 class CrawlerState(BaseModel):
     id: str
     url: str
     html: str
-    visual_elements: List[VisualElement]
 
 
 class CrawlerTransition(BaseModel):
-    from_state: CrawlerState
-    to_state: CrawlerState
-    pressed_element: VisualElement
+    id: str
+    from_state_id: str
+    to_state_id: str
+    locator: str
 
 
-class LabeledElement(BaseModel):
-    element_id: str
+class LabeledTransition(BaseModel):
+    id: str
     html_snippet: str
     name: Optional[str]
     action: Optional[str]
 
 
 class LabeledState(BaseModel):
-    state_id: str
+    id: str
     name: Optional[str]
     description: Optional[str]
+
+
+class CrawlerGraph(BaseModel):
+    """
+    The complete graph topology of the crawled application.
+    """
+    session_id: str
+    states: Dict[str, CrawlerState] = Field(
+        description="Dictionary mapping state_id to CrawlerState"
+    )
+    transitions: List[CrawlerTransition] = Field(
+        description="List of edges connecting the states"
+    )
+
+
+class LabeledGraph(BaseModel):
+    """
+    Maintains a separation of concerns between raw crawler data and human annotations.
+    Ideal for active labeling tools and database storage.
+    """
+    session_id: str
+    crawler_graph: CrawlerGraph
+    state_labels: Dict[str, LabeledState]
+    transition_labels: Dict[str, LabeledTransition]

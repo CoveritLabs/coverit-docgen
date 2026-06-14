@@ -1,6 +1,6 @@
-from fastapi import HTTPException, status
+from fastapi import HTTPException
 from src.core.redis import redis_manager
-from src.models.graph import CrawlerState, CrawlerTransition
+from src.models.graph import CrawlerState, CrawlerTransition, CrawlerGraph
 
 
 class LabelingService:
@@ -37,5 +37,17 @@ class LabelingService:
 
         job = await redis_manager.pool.enqueue_job(
             "task_label_transition", transition.model_dump()
+        )
+        return job.job_id
+
+    async def enqueue_graph_labeling(self, graph: CrawlerGraph) -> str:
+        """
+        Pushes a job to the Redis queue to label a CrawlerGraph
+        """
+        if not redis_manager.pool:
+            raise HTTPException(status_code=500, detail="Redis pool not initialized")
+
+        job = await redis_manager.pool.enqueue_job(
+            "task_label_graph", graph.model_dump()
         )
         return job.job_id

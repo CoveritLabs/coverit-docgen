@@ -14,7 +14,7 @@ class LabeledStateORM(Base):
     description = Column(Text, nullable=True)
 
 
-class LabeledElementORM(Base):
+class LabeledTransitionORM(Base):
     """SQLAlchemy ORM model for storing labeled transitions/elements in PostgreSQL."""
 
     __tablename__ = "labeled_elements"
