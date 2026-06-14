@@ -21,23 +21,14 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
 
         start_time = time.perf_counter()
 
-        try:
-            response = await call_next(request)
-            process_time = time.perf_counter() - start_time
+        response = await call_next(request)
+        process_time = time.perf_counter() - start_time
 
-            logger.info(
-                f"req_id={request_id} method={request.method} path={request.url.path} "
-                f"status={response.status_code} duration={process_time:.4f}s"
-            )
+        logger.info(
+            f"req_id={request_id} method={request.method} path={request.url.path} "
+            f"status={response.status_code} duration={process_time:.4f}s"
+        )
 
-            response.headers["X-Process-Time"] = str(process_time)
-            response.headers["X-Request-ID"] = request_id
-            return response
-
-        except Exception as e:
-            process_time = time.perf_counter() - start_time
-            logger.error(
-                f"req_id={request_id} method={request.method} path={request.url.path} "
-                f"status=500 duration={process_time:.4f}s error={str(e)}"
-            )
-            raise
+        response.headers["X-Process-Time"] = str(process_time)
+        response.headers["X-Request-ID"] = request_id
+        return response
