@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Set
 
 
 class BoundingBox(BaseModel):
@@ -39,12 +39,16 @@ class CrawlerGraph(BaseModel):
     """
     The complete graph topology of the crawled application.
     """
+
     session_id: str
     states: Dict[str, CrawlerState] = Field(
         description="Dictionary mapping state_id to CrawlerState"
     )
     transitions: List[CrawlerTransition] = Field(
         description="List of edges connecting the states"
+    )
+    skip_states: Set[str] = Field(
+        default_factory=set, description="Set of skipped state IDs"
     )
 
 
@@ -53,6 +57,7 @@ class LabeledGraph(BaseModel):
     Maintains a separation of concerns between raw crawler data and human annotations.
     Ideal for active labeling tools and database storage.
     """
+
     session_id: str
     crawler_graph: CrawlerGraph
     state_labels: Dict[str, LabeledState]

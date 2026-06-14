@@ -96,7 +96,8 @@ def label_crawler_graph(graph: CrawlerGraph) -> LabeledGraph:
     transition_labels: Dict[str, LabeledTransition] = {}
 
     for state_id, state in graph.states.items():
-        state_labels[state_id] = label_crawler_state(state)
+        if state_id not in graph.skip_states:
+            state_labels[state_id] = label_crawler_state(state)
 
     for transition in graph.transitions:
         from_state = graph.states.get(transition.from_state_id)

@@ -1,5 +1,4 @@
 import logging
-from src.models.graph import CrawlerGraph
 from src.services.labeling.rule_based import (
     label_crawler_state,
     label_crawler_transition,
@@ -7,7 +6,11 @@ from src.services.labeling.rule_based import (
 )
 from src.core.neo import neo_manager
 from src.repositories.labeling_repo import LabelingRepository
-from src.models.queries import SET_STATE_PENDING, SET_TRANSITION_PENDING
+from src.models.queries import (
+    SET_STATE_PENDING,
+    SET_TRANSITION_PENDING,
+    SET_SESSION_PENDING,
+)
 
 logger = logging.getLogger("arq.worker.labeling")
 
@@ -86,7 +89,7 @@ async def task_label_transition_by_id(ctx: dict, transition_id: str) -> dict:
             labeled_transition = label_crawler_transition(transition, from_state)
 
             await repo.save_labeled_transition(labeled_transition)
-            
+
             logger.info(f"[Transition:{transition_id}] Successfully labeled and saved.")
             return {"status": "success", "transition_id": transition_id}
 
@@ -106,29 +109,50 @@ async def task_label_transition_by_id(ctx: dict, transition_id: str) -> dict:
             raise e
 
 
-async def task_label_graph(ctx: dict, graph_dict: dict) -> dict:
+async def task_label_graph(ctx: dict, session_id: dict) -> dict:
     """
     Background ARQ task to label a complete CrawlerGraph.
-
-    Note: If you fully migrated to cron-based individual polling, this function
-    might be obsolete. Kept here for legacy manual triggers.
     """
-    graph = CrawlerGraph.model_validate(graph_dict)
-    session_id = graph.session_id
     logger.info(f"[Graph:{session_id}] Starting full graph labeling task...")
 
     async with neo_manager.driver.session() as session:
         try:
-            labeled_graph = label_crawler_graph(graph)
-
             repo = LabelingRepository(session)
-            await repo.save_labeled_graph(labeled_graph)
+
+            graph = await repo.get_graph(session_id)
+
+            if not graph:
+                logger.warning("[Graph:{session_id}] skipping graph labeling.")
+                return {"status": "Not Completed", "graph_session_id": session_id}
 
             logger.info(
-                f"[Graph:{session_id}] Successfully labeled and saved entire graph."
+                f"[Graph:{session_id}] skipping {len(graph.skip_states)} states labeling."
+            )
+
+            labeled_graph = label_crawler_graph(graph)
+
+            await repo.save_labeled_graph(labeled_graph)
+
+            len_states = len(graph.states) - len(graph.skip_states)
+            len_transitions = len(graph.transitions)
+
+            logger.info(
+                f"[Graph:{session_id}] Successfully labeled and saved graph. "
+                f"States: {len_states}, Transitions: {len_transitions}"
             )
             return {"status": "success", "graph_session_id": session_id}
 
         except Exception as e:
-            logger.exception(f"[Graph:{session_id}] Failed to label entire graph.")
+            logger.exception(
+                f"[Session:{session_id}] Failed labeling. Reverting QUEUED items to PENDING."
+            )
+
+            try:
+                result = await session.run(SET_SESSION_PENDING, session_id=session_id)
+                await result.consume()
+            except Exception as rollback_err:
+                logger.error(
+                    f"[Session:{session_id}] CRITICAL: Failed to revert status to PENDING: {rollback_err}"
+                )
+
             raise e

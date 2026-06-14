@@ -6,4 +6,4 @@ services:
       dockerfile: Dockerfile.dev
     volumes:
       - ./src:/app/src
-      - ./worker.py:/app/worker.py
+      - ./logs:/app/logs
