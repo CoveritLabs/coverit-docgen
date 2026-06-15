@@ -9,6 +9,11 @@ class Settings(BaseSettings):
         case_sensitive=False,
     )
 
+    # Constants
+    max_sessions_per_poll: int = 5
+    context_distance_threshold: float = 0.40
+    
+
     # Application
     app_name: str = "DocGen"
     app_version: str = "1.0.0"

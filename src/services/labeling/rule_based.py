@@ -1,44 +1,64 @@
 import uuid
 from typing import Dict
+
 from bs4 import BeautifulSoup
 from playwright.async_api import async_playwright
 
 from src.models.graph import (
+    CrawlerGraph,
     CrawlerState,
     CrawlerTransition,
-    LabeledTransition,
-    LabeledState,
-    CrawlerGraph,
     LabeledGraph,
+    LabeledState,
+    LabeledTransition,
 )
-from src.utils.html_tools import clean_element
-from src.services.labeling.page_analyzer import get_page_info
-from src.services.labeling.labeling import Labeling
 from src.services.labeling.actions import ActionDescription
+from src.services.labeling.labeling import Labeling
+from src.services.labeling.page_analyzer import get_page_info
+from src.utils.html_tools import clean_element
 
 
-async def handle_locator(html: str, locator: str):
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-        page = await browser.new_page()
-        await page.set_content(html)
+async def handle_locator(html: str, locator: str) -> tuple[str, str]:
+    """Mark the first Playwright locator match and return the updated HTML.
 
-        element = page.locator(locator).first
+    Args:
+        html: Complete origin-page HTML.
+        locator: Playwright locator expression for the interacted element.
 
-        unique_id = f"pw-bridge-{uuid.uuid4().hex[:8]}"
+    Returns:
+        A tuple containing serialized HTML and the temporary marker value.
 
-        await element.evaluate(
-            f'(node) => node.setAttribute("data-pw-locator", "{unique_id}")'
-        )
-        modified_html = await page.content()
-        await browser.close()
+    Raises:
+        ValueError: If HTML or locator metadata is missing.
+        playwright.async_api.Error: If the locator cannot be evaluated.
+    """
+    if not html.strip():
+        raise ValueError("Origin state HTML is empty")
+    if not locator or not locator.strip():
+        raise ValueError("Transition locator is empty")
 
-    return modified_html, unique_id
+    async with async_playwright() as playwright:
+        browser = await playwright.chromium.launch(headless=True)
+        try:
+            page = await browser.new_page()
+            await page.set_content(html)
+            element = page.locator(locator).first
+            if await element.count() == 0:
+                raise ValueError(f"Transition locator did not match: {locator}")
+
+            unique_id = f"pw-bridge-{uuid.uuid4().hex[:8]}"
+            await element.evaluate(
+                "(node, marker) => node.setAttribute(" '"data-pw-locator", marker)',
+                unique_id,
+            )
+            return await page.content(), unique_id
+        finally:
+            await browser.close()
 
 
 def label_crawler_state(state: CrawlerState) -> LabeledState:
-    """Labels a single Crawler State (Page level information)."""
-    soup = BeautifulSoup(state.html, "html.parser")
+    """Create a page-level label for one crawler state."""
+    soup = BeautifulSoup(state.html or "", "html.parser")
     page_info = get_page_info(state.url, soup)
     return LabeledState(
         id=state.id,
@@ -47,31 +67,30 @@ def label_crawler_state(state: CrawlerState) -> LabeledState:
     )
 
 
-def label_crawler_transition(
+async def label_crawler_transition(
     transition: CrawlerTransition, from_state: CrawlerState
 ) -> LabeledTransition:
+    """Create a semantic label for one transition using its origin page.
+
+    Missing HTML, locator metadata, or locator matches are treated as labeling
+    failures so callers can return only that transition to ``PENDING``.
     """
-    Labels a transition edge. Takes the transition ID mappings and the origin
-    state to resolve the HTML and visual elements.
-    """
-    descriptor = ActionDescription()
+    modified_html, element_id = await handle_locator(
+        from_state.html, transition.locator
+    )
+    soup = BeautifulSoup(modified_html, "html.parser")
+    element = soup.find(attrs={"data-pw-locator": element_id})
+    if element is None:
+        raise ValueError("Marked transition element was not found in parsed HTML")
+
     labeler = Labeling()
-    element = None
-    if from_state.html:
-        modified_html, element_id = handle_locator(from_state.html, transition.locator)
-        soup = BeautifulSoup(modified_html, "html.parser")
-        element = soup.find(attrs={"data-pw-locator": element_id})
+    name = labeler.get_element_name(element, soup.html or soup)
+    if not name or not name.strip():
+        raise ValueError("Transition element produced an empty label")
 
-    if not element:
-        return LabeledTransition(
-            id=transition.id,
-            html_snippet="",
-            name="Unknown",
-            action="Element not found",
-        )
-
-    name = labeler.get_element_name(element, soup.html) or "Unknown"
-    action = descriptor.get_action_description(element, name) or "Unknown"
+    action = ActionDescription().get_action_description(element, name)
+    if not action or not action.strip():
+        raise ValueError("Transition element produced an empty action")
 
     return LabeledTransition(
         id=transition.id,
@@ -81,16 +100,11 @@ def label_crawler_transition(
     )
 
 
-def label_crawler_graph(graph: CrawlerGraph) -> LabeledGraph:
-    """
-    Traverses an entire CrawlerGraph, labeling all structural states and
-    navigational transitions, and returns a compiled LabeledGraph.
+async def label_crawler_graph(graph: CrawlerGraph) -> LabeledGraph:
+    """Label all eligible graph records and return the compiled result.
 
-    Args:
-        graph (CrawlerGraph): The raw topological graph from the crawler.
-
-    Returns:
-        LabeledGraph: The enriched graph pairing raw structure with semantic labels.
+    This helper raises on an item failure. The ARQ graph task performs its own
+    per-item loop so it can persist successes and roll back failures separately.
     """
     state_labels: Dict[str, LabeledState] = {}
     transition_labels: Dict[str, LabeledTransition] = {}
@@ -101,12 +115,11 @@ def label_crawler_graph(graph: CrawlerGraph) -> LabeledGraph:
 
     for transition in graph.transitions:
         from_state = graph.states.get(transition.from_state_id)
-
-        if not from_state:
-            continue
-
-        labeled_trans = label_crawler_transition(transition, from_state)
-        transition_labels[transition.id] = labeled_trans
+        if from_state is None:
+            raise ValueError(f"Origin state {transition.from_state_id} is unavailable")
+        transition_labels[transition.id] = await label_crawler_transition(
+            transition, from_state
+        )
 
     return LabeledGraph(
         session_id=graph.session_id,
