@@ -1,13 +1,16 @@
 import math
+
 from bs4 import NavigableString, Tag, Comment
 from src.utils.html_tools import (
     is_readable,
     is_interactive,
     center,
     get_bbox,
-    get_direction,
 )
 from src.services.labeling.constants import MAX_DEPTH, NAME_ATTRS
+from src.core.config import get_settings
+
+settings = get_settings()
 
 
 class Labeling:
@@ -195,11 +198,10 @@ class Labeling:
         if not isinstance(tag, Tag) or isinstance(tag, Comment):
             return None
 
-        name = (
-            self.get_name_from_attrs(tag)
-            if is_interactive(tag)
-            else self.get_name_from_text(tag)
-        )
+        if is_interactive(tag):
+            name = self.get_name_from_attrs(tag) or self.get_name_from_text(tag)
+        else:
+            name = self.get_name_from_text(tag)
 
         if name and is_readable(name):
             return {"text": name, "type": tag.get("role") or tag.name or "text"}
@@ -207,14 +209,27 @@ class Labeling:
         return None
 
     def _get_name_from_context(self, el: Tag, root: Tag) -> str | None:
-        """
-        Generate a contextual name using nearby visual elements.
+        """Describe an unnamed element by nearby context or screen position.
 
-        Uses bounding box attributes stored directly on DOM elements:
-            data-x
-            data-y
-            data-width
-            data-height
+        Args:
+            el: Target element with ``data-x``, ``data-y``, ``data-width``,
+                and ``data-height`` pixel metadata.
+            root: Page root containing other visual elements and, when
+                available, the screen bounding box.
+
+        Returns:
+            A relative description such as ``above the button 'Submit'`` when
+            the nearest meaningful neighbor is no more than 40% of the screen
+            width and height away. Otherwise returns an absolute description
+            based on normalized coordinates from 0.0 to 1.0. The regions use
+            thirds and produce top-left, top-center, top-right, left-center,
+            center, right-center, bottom-left, bottom-center, or bottom-right
+            wording. Returns ``None`` only when the target has no geometry.
+
+        Examples:
+            ``to the right of the input 'Search'``
+            ``in the bottom-right corner``
+            ``centered on the screen``
         """
 
         self._validate(el)
@@ -225,8 +240,27 @@ class Labeling:
             return None
 
         tx, ty = center(target_box)
+        visual_boxes = [
+            box
+            for tag in [root, *root.find_all(True)]
+            if (box := get_bbox(tag)) and box["width"] > 0 and box["height"] > 0
+        ]
+        if not visual_boxes:
+            return None
 
-        # nearest neighbor
+        root_box = get_bbox(root)
+        if not root_box or root_box["width"] <= 0 or root_box["height"] <= 0:
+            min_x = min(box["x"] for box in visual_boxes)
+            min_y = min(box["y"] for box in visual_boxes)
+            max_x = max(box["x"] + box["width"] for box in visual_boxes)
+            max_y = max(box["y"] + box["height"] for box in visual_boxes)
+            root_box = {
+                "x": min_x,
+                "y": min_y,
+                "width": max(max_x - min_x, target_box["width"], 1.0),
+                "height": max(max_y - min_y, target_box["height"], 1.0),
+            }
+
         best = None
         best_score = float("inf")
 
@@ -271,17 +305,51 @@ class Labeling:
                 best = {
                     "text": candidate["text"],
                     "type": candidate["type"],
-                    "direction": get_direction(dx, dy),
+                    "dx": dx,
+                    "dy": dy,
                 }
 
-        if not best:
-            return None
+        if best:
+            normalized_dx = abs(best["dx"]) / root_box["width"]
+            normalized_dy = abs(best["dy"]) / root_box["height"]
+            if max(normalized_dx, normalized_dy) <= settings.context_distance_threshold:
+                direction = self._relative_direction(best["dx"], best["dy"])
+                return f"{direction} the {best['type']} '{best['text']}'"
 
-        return (
-            f"element to the {best['direction']} "
-            f"of the {best['type']} "
-            f"'{best['text']}'"
-        )
+        normalized_x = min(1.0, max(0.0, (tx - root_box["x"]) / root_box["width"]))
+        normalized_y = min(1.0, max(0.0, (ty - root_box["y"]) / root_box["height"]))
+        return self._absolute_screen_position(normalized_x, normalized_y)
+
+    @staticmethod
+    def _relative_direction(dx: float, dy: float) -> str:
+        """Return natural relative wording for a target-to-neighbor offset."""
+        horizontal = "to the right of" if dx > 0 else "to the left of"
+        vertical = "below" if dy > 0 else "above"
+        if abs(dx) > abs(dy) * 1.5:
+            return horizontal
+        if abs(dy) > abs(dx) * 1.5:
+            return vertical
+        return f"{vertical} and {horizontal}"
+
+    @staticmethod
+    def _absolute_screen_position(x: float, y: float) -> str:
+        """Map normalized center coordinates to one of nine screen regions."""
+        horizontal = "left" if x < 0.33 else "right" if x > 0.67 else "center"
+        vertical = "top" if y < 0.33 else "bottom" if y > 0.67 else "center"
+        region = f"{vertical}-{horizontal}"
+
+        descriptions = {
+            "top-left": "in the top-left corner",
+            "top-center": "at the top of the screen",
+            "top-right": "in the top-right corner",
+            "center-left": "on the left side of the screen",
+            "center-center": "centered on the screen",
+            "center-right": "on the right side of the screen",
+            "bottom-left": "in the bottom-left corner",
+            "bottom-center": "at the bottom of the screen",
+            "bottom-right": "in the bottom-right corner",
+        }
+        return descriptions[region]
 
     def get_element_name(self, el: Tag, root: Tag) -> str | None:
         """
@@ -293,7 +361,7 @@ class Labeling:
 
         Args:
             el: Target HTML element.
-            visual_elements: Elements with visual bounding-box metadata.
+            root: Page root containing elements with visual bounding-box metadata.
 
         Returns:
             A human-readable name or None if no name can be determined.
