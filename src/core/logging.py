@@ -1,18 +1,31 @@
 import logging
 import logging.config
 from pathlib import Path
+
 from src.core.config import Settings
 
 
-def setup_logging(settings: Settings) -> None:
-    """
-    Configures the global Python logging system based on the environment.
-    Uses dictionary configuration for clean, predictable output.
-    """
+def setup_logging(
+    settings: Settings, log_dir: Path | str | None = None
+) -> Path:
+    """Configure console and rotating-file logging for the process.
 
-    log_dir = Path("logs")
-    log_dir.mkdir(parents=True, exist_ok=True)
+    Args:
+        settings: Runtime settings controlling environment and log level.
+        log_dir: Optional destination override, primarily for tests. By
+            default logs are written to the repository/container ``logs``
+            directory resolved from this module's absolute location.
 
+    Returns:
+        The absolute path of the configured ``worker.log`` file.
+    """
+    resolved_log_dir = (
+        Path(log_dir).resolve()
+        if log_dir is not None
+        else Path(__file__).resolve().parents[2] / "logs"
+    )
+    resolved_log_dir.mkdir(parents=True, exist_ok=True)
+    log_file = resolved_log_dir / "worker.log"
     log_level = "DEBUG" if settings.debug else "INFO"
 
     logging_config = {
@@ -22,9 +35,6 @@ def setup_logging(settings: Settings) -> None:
             "standard": {
                 "format": "%(asctime)s [%(levelname)s] [%(name)s] - %(message)s",
                 "datefmt": "%Y-%m-%d %H:%M:%S",
-            },
-            "json": {
-                "format": '{"time": "%(asctime)s", "level": "%(levelname)s", "logger": "%(name)s", "message": "%(message)s"}'
             },
         },
         "handlers": {
@@ -38,21 +48,16 @@ def setup_logging(settings: Settings) -> None:
                 "level": log_level,
                 "class": "logging.handlers.RotatingFileHandler",
                 "formatter": "standard",
-                "filename": "logs/worker.log",  # Saves inside the logs folder
-                "maxBytes": 10485760,  # 10 MB size limit per file
-                "backupCount": 5,  # Keeps the last 5 files (worker.log.1, worker.log.2...)
+                "filename": str(log_file),
+                "maxBytes": 10 * 1024 * 1024,
+                "backupCount": 5,
                 "encoding": "utf-8",
             },
         },
         "loggers": {
-            "src": {
+            "neo4j": {
                 "handlers": ["console", "file"],
-                "level": log_level,
-                "propagate": False,
-            },
-            "api": {
-                "handlers": ["console", "file"],
-                "level": log_level,
+                "level": "WARNING",
                 "propagate": False,
             },
             "uvicorn.access": {
@@ -67,14 +72,16 @@ def setup_logging(settings: Settings) -> None:
             },
         },
         "root": {
-            # Catch-all for any other loggers
             "handlers": ["console", "file"],
-            "level": "INFO",
+            "level": log_level,
         },
     }
 
     logging.config.dictConfig(logging_config)
-    logger = logging.getLogger(__name__)
-    logger.info(
-        f"Logging initialized. Environment: {settings.environment}, Level: {log_level}"
+    logging.getLogger(__name__).info(
+        "Logging initialized. Environment: %s, Level: %s, File: %s",
+        settings.environment,
+        log_level,
+        log_file,
     )
+    return log_file

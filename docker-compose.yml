@@ -24,6 +24,8 @@ services:
         condition: service_healthy
     restart: unless-stopped
     command: ["arq", "src.worker.WorkerSettings"]
+    volumes:
+      - docgen_logs:/app/logs
 
   db:
     image: postgres:18
@@ -54,5 +56,6 @@ services:
     restart: unless-stopped
 
 volumes:
+  docgen_logs:
   postgres_data:
   redis_data:

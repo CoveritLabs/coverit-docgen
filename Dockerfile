@@ -13,23 +13,25 @@ COPY pyproject.toml uv.lock ./
 
 RUN uv sync --frozen --no-dev
 
-COPY src ./src
-COPY worker.py ./worker.py
-
 # Runtime
 FROM python:3.11-slim
 
 WORKDIR /app
 
-COPY --from=builder /app /app
+COPY --from=builder /app/.venv /app/.venv
 
 ENV PATH="/app/.venv/bin:$PATH"
 ENV ENVIRONMENT=production
 ENV PYTHONUNBUFFERED=1
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 
-RUN useradd -m docgen && \
-    chown -R docgen:docgen /app
+RUN playwright install --with-deps chromium && \
+    mkdir -p /app/logs && \
+    useradd -m docgen && \
+    chown -R docgen:docgen /app /ms-playwright
+
+COPY --chown=docgen:docgen src ./src
 
 USER docgen
 
-CMD ["arq", "worker.WorkerSettings"]
+CMD ["arq", "src.worker.WorkerSettings"]
