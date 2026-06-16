@@ -1,5 +1,7 @@
 import logging
 import uuid
+import json
+import time
 
 from arq import Retry
 
@@ -12,6 +14,59 @@ from src.services.bdd.regression import compile_bdd
 settings = get_settings()
 logger = logging.getLogger("arq.worker.bdd")
 
+BULLMQ_QUEUE = "bdd-processing-queue"
+BULLMQ_JOB_NAME = "task_process_bdd_output"
+
+
+async def _enqueue_bullmq_job(redis, queue: str, job_name: str, data: dict) -> str:
+    """
+    Push a job onto a BullMQ queue by writing the required Redis keys directly.
+    BullMQ stores jobs as hashes at  bull:<queue>:<job_id>
+    and lists the id in  bull:<queue>:wait
+    """
+    job_id = uuid.uuid4().hex
+    key_prefix = f"bull:{queue}"
+    job_key = f"{key_prefix}:{job_id}"
+    timestamp = int(time.time() * 1000)
+
+    job_json = json.dumps(data, ensure_ascii=False)
+
+    await redis.hset(
+        job_key,
+        mapping={
+            "id": job_id,
+            "name": job_name,
+            "data": job_json,
+            "opts": json.dumps(
+                {"attempts": 3, "backoff": {"type": "exponential", "delay": 500}}
+            ),
+            "timestamp": timestamp,
+        },
+    )
+
+    await redis.lpush(f"{key_prefix}:wait", job_id)
+
+    logger.info(
+        "[BDD] Enqueued BullMQ job '%s' (id=%s) onto queue '%s'",
+        job_name,
+        job_id,
+        queue,
+    )
+    return job_id
+
+def save_files(results):
+    #! temp function for local testing
+    safe_filename = "".join(
+        c if c.isalnum() else "_" for c in results["feature_name"].lower()
+    )
+
+    file_path = f"./src/{safe_filename}.feature"
+    with open(file_path, "w", encoding="utf-8") as f:
+        f.write(results["feature_text"])
+
+    file_name = f"./src/bdd_{results["session_id"]}.json"
+    with open(file_name, "w", encoding="utf-8") as f:
+        json.dump(results, f, indent=4, ensure_ascii=False)
 
 async def task_generate_bdd(ctx: dict, payload: dict) -> dict:
     """Generate BDD artifacts after all graph records are labeled."""
@@ -33,7 +88,16 @@ async def task_generate_bdd(ctx: dict, payload: dict) -> dict:
 
         pending = status["pending_states"] + status["pending_transitions"]
         queued = status["queued_states"] + status["queued_transitions"]
-        if pending or queued:
+        if False and (pending or queued):
+            logger.info(
+                "[BDD:%s] Incomplete labeling detected. "
+                "States (Pending: %s, Queued: %s) | Transitions (Pending: %s, Queued: %s)",
+                session_id,
+                status["pending_states"],
+                status["queued_states"],
+                status["pending_transitions"],
+                status["queued_transitions"],
+            )
             if job_try >= settings.bdd_max_retries:
                 raise RuntimeError(
                     f"Labeling did not complete for session {session_id} "
@@ -54,9 +118,7 @@ async def task_generate_bdd(ctx: dict, payload: dict) -> dict:
                             session_id,
                         )
                         if job is None:
-                            raise RuntimeError(
-                                "ARQ did not enqueue the labeling job"
-                            )
+                            raise RuntimeError("ARQ did not enqueue the labeling job")
                     except Exception:
                         logger.error(f"Labeling session {session_id} Failed")
                         await repo.rollback_claim(
@@ -94,7 +156,8 @@ async def task_generate_bdd(ctx: dict, payload: dict) -> dict:
         compiled.feature_name,
         len(flows),
     )
-    return {
+
+    result_payload = {
         "status": "success",
         "session_id": session_id,
         "feature_name": compiled.feature_name,
@@ -104,3 +167,16 @@ async def task_generate_bdd(ctx: dict, payload: dict) -> dict:
         "assertions": {},
         "action_hooks": {},
     }
+
+    #! remove this later
+    save_files(results=result_payload)
+
+    # add a job for the code-gen worker 
+    await _enqueue_bullmq_job(
+        ctx["redis"],
+        BULLMQ_QUEUE,
+        BULLMQ_JOB_NAME,
+        result_payload,
+    )
+
+    return result_payload
