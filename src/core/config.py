@@ -12,7 +12,8 @@ class Settings(BaseSettings):
     # Constants
     max_sessions_per_poll: int = 5
     context_distance_threshold: float = 0.40
-    
+    bdd_retry_delay_seconds: int = 30
+    bdd_max_retries: int = 5
 
     # Application
     app_name: str = "DocGen"
