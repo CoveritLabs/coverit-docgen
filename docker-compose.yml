@@ -7,16 +7,39 @@ services:
     pull_policy: always
     container_name: docgen-worker
     environment:
-      - PYTHONUNBUFFERED=1
-      - APP_NAME=${APP_NAME:-DocGen}
-      - DEBUG=${DEBUG:-False}
-      - ENVIRONMENT=${ENVIRONMENT:-development}
-      # Database & Services
-      - DATABASE_URL=${DATABASE_URL:-postgresql+asyncpg://postgres:postgres@db:5432/coverit}
-      - REDIS_URL=${REDIS_URL:-redis://redis:6379}
-      - NEO4J_URL=${NEO4J_URL:-bolt://neo4j:7687}
-      - NEO4J_USERNAME=${NEO4J_USERNAME:-neo4j}
-      - NEO4J_PASSWORD=${NEO4J_PASSWORD:-password}
+        # Python
+        - PYTHONUNBUFFERED=1
+
+        # Application
+        - APP_NAME=${APP_NAME:-DocGen}
+        - APP_VERSION=${APP_VERSION:-1.0.0}
+        - DEBUG=${DEBUG:-False}
+        - ENVIRONMENT=${ENVIRONMENT:-development}
+
+        # Constants
+        - MAX_SESSIONS_PER_POLL=${MAX_SESSIONS_PER_POLL:-5}
+        - CONTEXT_DISTANCE_THRESHOLD=${CONTEXT_DISTANCE_THRESHOLD:-0.40}
+        - BDD_RETRY_DELAY_SECONDS=${BDD_RETRY_DELAY_SECONDS:-30}
+        - BDD_MAX_RETRIES=${BDD_MAX_RETRIES:-5}
+
+        # Database
+        - DB_USER=${DB_USER:-postgres}
+        - DB_PASSWORD=${DB_PASSWORD:-postgres}
+        - DB_NAME=${DB_NAME:-postgres}
+        - DATABASE_URL=${DATABASE_URL:-postgresql+asyncpg://postgres:postgres@db:5432/coverit?schema=public}
+
+        # External Services
+        - REDIS_URL=${REDIS_URL:-redis://redis:6379}
+        - NEO4J_URL=${NEO4J_URL:-bolt://neo4j:7687}
+        - NEO4J_USERNAME=${NEO4J_USERNAME:-neo4j}
+        - NEO4J_PASSWORD=${NEO4J_PASSWORD:-password}
+
+        # Poller
+        - POLLER_CRON_HOURS=${POLLER_CRON_HOURS:-0,4,8,12,16,20}
+        - POLLER_CRON_MINUTES=${POLLER_CRON_MINUTES:-0}
+
+        # CORS
+        - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-["http://localhost:3000"]}
     depends_on:
       redis:
         condition: service_healthy
