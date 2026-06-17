@@ -45,8 +45,8 @@ async def cron_poll_unlabeled_data(ctx: dict) -> None:
                     raise RuntimeError("ARQ did not enqueue the session job")
             except Exception:
                 logger.exception(
-                    "Failed to enqueue session %s; rolling back its claim",
-                    session_id,
+                    f"Failed to enqueue session {session_id}; "
+                    "rolling back its claim"
                 )
                 await repo.rollback_claim(
                     session_id,
@@ -57,10 +57,8 @@ async def cron_poll_unlabeled_data(ctx: dict) -> None:
 
             queued += 1
             logger.info(
-                "Enqueued session %s with %s states and %s transitions",
-                session_id,
-                len(state_ids),
-                len(transition_ids),
+                f"Enqueued session {session_id} with {len(state_ids)} "
+                f"states and {len(transition_ids)} transitions"
             )
 
-    logger.info("Cron poll complete; queued %s sessions", queued)
+    logger.info(f"Cron poll complete; queued {queued} sessions")

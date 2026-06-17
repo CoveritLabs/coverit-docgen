@@ -12,7 +12,7 @@ logger = logging.getLogger("arq.worker.labeling")
 
 async def task_label_state_by_id(ctx: dict, state_id: str) -> dict:
     """Label one queued state and return it to pending if labeling fails."""
-    logger.info("[State:%s] Starting labeling task", state_id)
+    logger.info(f"[State:{state_id}] Starting labeling task")
 
     async with neo_manager.driver.session() as session:
         repo = LabelingRepository(session)
@@ -21,18 +21,18 @@ async def task_label_state_by_id(ctx: dict, state_id: str) -> dict:
             await repo.save_labeled_state(label_crawler_state(state))
         except Exception:
             logger.exception(
-                "[State:%s] Labeling failed; reverting to PENDING", state_id
+                f"[State:{state_id}] Labeling failed; reverting to PENDING"
             )
             await repo.set_state_pending(state_id)
             raise
 
-    logger.info("[State:%s] Successfully labeled and saved", state_id)
+    logger.info(f"[State:{state_id}] Successfully labeled and saved")
     return {"status": "success", "state_id": state_id}
 
 
 async def task_label_transition_by_id(ctx: dict, transition_id: str) -> dict:
     """Label one queued transition and return it to pending on failure."""
-    logger.info("[Transition:%s] Starting labeling task", transition_id)
+    logger.info(f"[Transition:{transition_id}] Starting labeling task")
 
     async with neo_manager.driver.session() as session:
         repo = LabelingRepository(session)
@@ -43,13 +43,13 @@ async def task_label_transition_by_id(ctx: dict, transition_id: str) -> dict:
             await repo.save_labeled_transition(labeled)
         except Exception:
             logger.exception(
-                "[Transition:%s] Labeling failed; reverting to PENDING",
-                transition_id,
+                f"[Transition:{transition_id}] Labeling failed; "
+                "reverting to PENDING"
             )
             await repo.set_transition_pending(transition_id)
             raise
 
-    logger.info("[Transition:%s] Successfully labeled and saved", transition_id)
+    logger.info(f"[Transition:{transition_id}] Successfully labeled and saved")
     return {"status": "success", "transition_id": transition_id}
 
 
@@ -60,7 +60,7 @@ async def task_label_graph(ctx: dict, session_id: str) -> dict:
     returns only the affected item to ``PENDING`` and processing continues with
     the remainder of the session.
     """
-    logger.info("[Graph:%s] Starting incremental graph labeling", session_id)
+    logger.info(f"[Graph:{session_id}] Starting incremental graph labeling")
     completed_states = 0
     completed_transitions = 0
     failed_states: list[str] = []
@@ -80,7 +80,7 @@ async def task_label_graph(ctx: dict, session_id: str) -> dict:
                 completed_states += 1
             except Exception:
                 failed_states.append(state_id)
-                logger.exception("[State:%s] Labeling failed", state_id)
+                logger.exception(f"[State:{state_id}] Labeling failed")
                 await repo.set_state_pending(state_id)
 
         for transition in graph.transitions:
@@ -95,7 +95,7 @@ async def task_label_graph(ctx: dict, session_id: str) -> dict:
                 completed_transitions += 1
             except Exception:
                 failed_transitions.append(transition.id)
-                logger.exception("[Transition:%s] Labeling failed", transition.id)
+                logger.exception(f"[Transition:{transition.id}] Labeling failed")
                 await repo.set_transition_pending(transition.id)
 
     status = "success"
@@ -103,11 +103,9 @@ async def task_label_graph(ctx: dict, session_id: str) -> dict:
         status = "partial_failure"
 
     logger.info(
-        "[Graph:%s] Finished: %s states, %s transitions, %s failures",
-        session_id,
-        completed_states,
-        completed_transitions,
-        len(failed_states) + len(failed_transitions),
+        f"[Graph:{session_id}] Finished: {completed_states} states, "
+        f"{completed_transitions} transitions, "
+        f"{len(failed_states) + len(failed_transitions)} failures"
     )
     return {
         "status": status,

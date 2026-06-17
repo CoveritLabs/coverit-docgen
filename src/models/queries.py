@@ -294,39 +294,27 @@ RETURN flow.flow_index AS flow_index,
        transition_index,
        elementId(checkpoint) AS checkpoint_db_id,
        checkpoint.state_hash AS checkpoint_hash,
-       
-       // --- Checkpoint Constant Fields ---
        checkpoint.name AS checkpoint_name,
-       "STATIC_CHECKPOINT_DESCRIPTION" AS checkpoint_description,
-       
+       checkpoint.description AS checkpoint_description,
        checkpoint.url AS checkpoint_url,
        checkpoint.labeling_status AS checkpoint_status,
        elementId(transition) AS transition_db_id,
        transition.transition_id AS transition_id,
-       
-       // --- Transition Constant Fields ---
-       "STATIC_TRANSITION_NAME" AS transition_name,
-       "STATIC_TRANSITION_ACTION" AS transition_action,
-       
+       transition.name AS transition_name,
+       transition.action AS transition_action,
        transition.action_type AS action_type,
        transition.locator_value AS locator_value,
        transition.labeling_status AS transition_status,
        elementId(from) AS from_db_id,
        from.state_hash AS from_hash,
-       
-       // --- From-State Constant Fields ---
        from.name AS from_name,
-       "STATIC_FROM_DESCRIPTION" AS from_description,
-       
+       from.description AS from_description,
        from.url AS from_url,
        from.labeling_status AS from_status,
        elementId(to) AS to_db_id,
        to.state_hash AS to_hash,
-       
-       // --- To-State Constant Fields ---
        to.name AS to_name,
-       "STATIC_TO_DESCRIPTION" AS to_description,
-       
+       to.description AS to_description,
        to.url AS to_url,
        to.labeling_status AS to_status
 ORDER BY flow_index, transition_index

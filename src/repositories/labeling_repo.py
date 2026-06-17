@@ -132,7 +132,7 @@ class LabelingRepository:
                 skip_states.add(record["from_id"])
 
         if not transitions and not states:
-            logger.warning("No queued data found for session %s", session_id)
+            logger.warning(f"No queued data found for session {session_id}")
             return None
 
         return CrawlerGraph(
