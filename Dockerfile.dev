@@ -13,6 +13,9 @@ COPY pyproject.toml uv.lock ./
 RUN uv sync
 
 ENV PATH="/app/.venv/bin:$PATH"
+
+RUN playwright install --with-deps chromium
+
 ENV ENVIRONMENT=development
 ENV PYTHONUNBUFFERED=1
 

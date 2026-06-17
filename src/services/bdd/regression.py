@@ -1,9 +1,9 @@
-import re
 from collections import Counter, defaultdict
-from dataclasses import dataclass
 from urllib.parse import urlparse
-
+from src.utils.helpers import words, title, upper_snake, pascal, slug, url_area, jaccard
 from src.models.bdd import (
+    CompiledFeature,
+    CompiledBdd,
     FeaturePlan,
     ResolvedFlow,
     ResolvedState,
@@ -26,35 +26,6 @@ GENERIC_FEATURE_WORDS = {
     "user",
     "view",
 }
-
-
-@dataclass(frozen=True)
-class CompiledBdd:
-    feature_name: str
-    feature_text: str
-    states: dict[str, dict]
-    transitions: dict[str, dict]
-
-
-def _words(value: str) -> list[str]:
-    return re.findall(r"[A-Za-z0-9]+", value)
-
-
-def _title(value: str) -> str:
-    return " ".join(word.capitalize() for word in _words(value))
-
-
-def _upper_snake(value: str, fallback: str) -> str:
-    words = _words(value)
-    return "_".join(word.upper() for word in words) or fallback
-
-
-def _pascal(value: str) -> str:
-    return "".join(word.capitalize() for word in _words(value))
-
-
-def _slug(value: str) -> str:
-    return "-".join(word.lower() for word in _words(value)) or "state"
 
 
 def _unique_entities(flows: list[ResolvedFlow]):
@@ -81,7 +52,7 @@ def _unique_entities(flows: list[ResolvedFlow]):
 def _assign_ids(entities, prefix: str) -> dict[str, str]:
     grouped: dict[str, list] = defaultdict(list)
     for entity in entities:
-        grouped[f"{prefix}_{_upper_snake(entity.name, 'UNNAMED')}"].append(entity)
+        grouped[f"{prefix}_{upper_snake(entity.name, 'UNNAMED')}"].append(entity)
 
     assigned: dict[str, str] = {}
     for base_id, members in grouped.items():
@@ -95,19 +66,30 @@ def _assign_ids(entities, prefix: str) -> dict[str, str]:
 
 def _class_name(identifier: str, prefix: str, suffix: str) -> str:
     stem = identifier.removeprefix(f"{prefix}_")
-    return f"{_pascal(stem)}{suffix}"
+    return f"{pascal(stem)}{suffix}"
+
+
+def _flow_labels(flow: ResolvedFlow) -> list[str]:
+    labels = [flow.checkpoint.name]
+    labels.extend(transition.name for transition in flow.transitions)
+    labels.append(flow.transitions[-1].to_state.name)
+    return labels
+
+
+def _flow_urls(flow: ResolvedFlow) -> list[str]:
+    urls = [flow.checkpoint.url]
+    for transition in flow.transitions:
+        urls.extend([transition.from_state.url, transition.to_state.url])
+    return urls
 
 
 def infer_feature_name(flows: list[ResolvedFlow]) -> str:
     label_tokens: list[set[str]] = []
     for flow in flows:
-        labels = [flow.checkpoint.name]
-        labels.extend(transition.name for transition in flow.transitions)
-        labels.append(flow.transitions[-1].to_state.name)
-        for label in labels:
+        for label in _flow_labels(flow):
             tokens = {
                 token.lower()
-                for token in _words(label)
+                for token in words(label)
                 if token.lower() not in GENERIC_FEATURE_WORDS
             }
             if tokens:
@@ -127,24 +109,22 @@ def infer_feature_name(flows: list[ResolvedFlow]) -> str:
         hostname = next(iter(hostnames))
         application = hostname.split(".")[0].replace("-", " ")
         if application:
-            return f"{_title(application)} User Flows"
+            return f"{title(application)} User Flows"
 
     return "Application User Flows"
 
 
 def _base_scenario_name(flow: ResolvedFlow) -> str:
     labels = [
-        _title(transition.name)
-        for transition in flow.transitions
-        if transition.name
+        title(transition.name) for transition in flow.transitions if transition.name
     ]
     if len(labels) == 1:
         return labels[0]
     if 2 <= len(labels) <= 3:
         return " Then ".join(labels)
     return (
-        f"Navigate from {_title(flow.checkpoint.name)} to "
-        f"{_title(flow.transitions[-1].to_state.name)}"
+        f"Navigate from {title(flow.checkpoint.name)} to "
+        f"{title(flow.transitions[-1].to_state.name)}"
     )
 
 
@@ -160,6 +140,138 @@ def _scenario_names(flows: list[ResolvedFlow]) -> list[str]:
         seen[base_name] += 1
         names.append(f"{base_name} Scenario {seen[base_name]}")
     return names
+
+
+def _scenario_profile(flow: ResolvedFlow, scenario_name: str) -> set[str]:
+    tokens: set[str] = set()
+    labels = _flow_labels(flow)
+    labels.append(scenario_name)
+    labels.extend(transition.action for transition in flow.transitions)
+    for label in labels:
+        tokens.update(token.lower() for token in words(label))
+    for url in _flow_urls(flow):
+        parsed = urlparse(url)
+        if parsed.hostname:
+            tokens.update(words(parsed.hostname.split(".")[0].lower()))
+        tokens.update(token.lower() for token in words(parsed.path))
+    return {token for token in tokens if token not in GENERIC_FEATURE_WORDS}
+
+
+def _destination_anchor(flow: ResolvedFlow) -> str:
+    end_state = flow.transitions[-1].to_state
+    area = url_area(end_state.url)
+    if area:
+        return f"url:{area}"
+    return f"state:{upper_snake(end_state.name, 'UNKNOWN')}"
+
+
+def _group_centroid(group: list[int], profiles: list[set[str]]) -> set[str]:
+    centroid: set[str] = set()
+    for index in group:
+        centroid.update(profiles[index])
+    return centroid
+
+
+def _merge_groups(
+    groups: list[list[int]],
+    profiles: list[set[str]],
+    threshold: float,
+) -> list[list[int]]:
+    merged = [list(group) for group in groups]
+    changed = True
+    while changed:
+        changed = False
+        best_pair: tuple[int, int] | None = None
+        best_score = threshold
+        for left_index in range(len(merged)):
+            left_profile = _group_centroid(merged[left_index], profiles)
+            for right_index in range(left_index + 1, len(merged)):
+                score = jaccard(
+                    left_profile,
+                    _group_centroid(merged[right_index], profiles),
+                )
+                if score >= best_score:
+                    best_score = score
+                    best_pair = (left_index, right_index)
+
+        if best_pair is None:
+            continue
+
+        left_index, right_index = best_pair
+        merged[left_index].extend(merged[right_index])
+        merged[left_index].sort()
+        del merged[right_index]
+        changed = True
+
+    return merged
+
+
+def _merge_singletons(
+    groups: list[list[int]],
+    profiles: list[set[str]],
+    threshold: float,
+) -> list[list[int]]:
+    merged = [list(group) for group in groups]
+    for group in list(merged):
+        if len(group) != 1 or group not in merged:
+            continue
+        singleton_index = group[0]
+        best_group: list[int] | None = None
+        best_score = threshold
+        for candidate in merged:
+            if candidate == group:
+                continue
+            score = jaccard(
+                profiles[singleton_index],
+                _group_centroid(candidate, profiles),
+            )
+            if score >= best_score:
+                best_score = score
+                best_group = candidate
+        if best_group is None:
+            continue
+        best_group.append(singleton_index)
+        best_group.sort()
+        merged.remove(group)
+    return merged
+
+
+def _feature_groups(
+    flows: list[ResolvedFlow],
+    split_features: bool,
+    feature_similarity_threshold: float,
+    singleton_merge_threshold: float,
+) -> list[list[ResolvedFlow]]:
+    if not split_features:
+        return [flows]
+
+    scenario_names = _scenario_names(flows)
+    profiles = [
+        _scenario_profile(flow, scenario_name)
+        for flow, scenario_name in zip(flows, scenario_names)
+    ]
+    anchored: dict[str, list[int]] = defaultdict(list)
+    for index, flow in enumerate(flows):
+        anchored[_destination_anchor(flow)].append(index)
+
+    groups = list(anchored.values())
+    groups = _merge_groups(groups, profiles, feature_similarity_threshold)
+    groups = _merge_singletons(groups, profiles, singleton_merge_threshold)
+    groups.sort(key=lambda group: min(group))
+    return [[flows[index] for index in group] for group in groups]
+
+
+def _unique_feature_names(names: list[str]) -> list[str]:
+    totals = Counter(names)
+    seen: Counter[str] = Counter()
+    unique: list[str] = []
+    for name in names:
+        if totals[name] == 1:
+            unique.append(name)
+            continue
+        seen[name] += 1
+        unique.append(f"{name} {seen[name]}")
+    return unique
 
 
 def _build_feature_plan(
@@ -201,6 +313,9 @@ def _build_feature_plan(
 def compile_bdd(
     flows: list[ResolvedFlow],
     outgoing_locators: dict[str, list[str]],
+    split_features: bool = False,
+    feature_similarity_threshold: float = 0.42,
+    singleton_merge_threshold: float = 0.25,
 ) -> CompiledBdd:
     """Compile resolved graph flows into Gherkin and regression mappings."""
     if not flows:
@@ -209,7 +324,30 @@ def compile_bdd(
     states, transitions = _unique_entities(flows)
     state_ids = _assign_ids(states, "S")
     transition_ids = _assign_ids(transitions, "T")
-    plan = _build_feature_plan(flows, state_ids, transition_ids)
+    flow_groups = _feature_groups(
+        flows,
+        split_features,
+        feature_similarity_threshold,
+        singleton_merge_threshold,
+    )
+    plans = [
+        _build_feature_plan(group, state_ids, transition_ids) for group in flow_groups
+    ]
+    feature_names = _unique_feature_names([plan.name for plan in plans])
+    features = [
+        CompiledFeature(
+            id=f"F_{upper_snake(feature_name, f'FEATURE_{index + 1}')}",
+            feature_name=feature_name,
+            feature_text=render_feature(
+                FeaturePlan(
+                    name=feature_name,
+                    scenarios=plan.scenarios,
+                )
+            ),
+            scenario_names=[scenario.name for scenario in plan.scenarios],
+        )
+        for index, (feature_name, plan) in enumerate(zip(feature_names, plans))
+    ]
 
     state_mappings: dict[str, dict] = {}
     for state in states:
@@ -223,12 +361,9 @@ def compile_bdd(
             "description": state.description,
             "url": state.url,
             "className": _class_name(state_id, "S", "State"),
-            "baselineDir": _slug(state_id.removeprefix("S_")),
+            "baselineDir": slug(state_id.removeprefix("S_")),
             "dom": {
-                "elements": {
-                    locator: {"cssSelector": locator}
-                    for locator in locators
-                }
+                "elements": {locator: {"cssSelector": locator} for locator in locators}
             },
         }
 
@@ -254,8 +389,9 @@ def compile_bdd(
         }
 
     return CompiledBdd(
-        feature_name=plan.name,
-        feature_text=render_feature(plan),
+        features=features,
         states=state_mappings,
         transitions=transition_mappings,
+        feature_name=features[0].feature_name if not split_features else None,
+        feature_text=features[0].feature_text if not split_features else None,
     )

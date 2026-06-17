@@ -1,3 +1,4 @@
+import os
 import logging
 import uuid
 import json
@@ -47,26 +48,10 @@ async def _enqueue_bullmq_job(redis, queue: str, job_name: str, data: dict) -> s
     await redis.lpush(f"{key_prefix}:wait", job_id)
 
     logger.info(
-        "[BDD] Enqueued BullMQ job '%s' (id=%s) onto queue '%s'",
-        job_name,
-        job_id,
-        queue,
+        f"[BDD] Enqueued BullMQ job '{job_name}' (id={job_id}) " f"onto queue '{queue}'"
     )
     return job_id
 
-def save_files(results):
-    #! temp function for local testing
-    safe_filename = "".join(
-        c if c.isalnum() else "_" for c in results["feature_name"].lower()
-    )
-
-    file_path = f"./src/{safe_filename}.feature"
-    with open(file_path, "w", encoding="utf-8") as f:
-        f.write(results["feature_text"])
-
-    file_name = f"./src/bdd_{results["session_id"]}.json"
-    with open(file_name, "w", encoding="utf-8") as f:
-        json.dump(results, f, indent=4, ensure_ascii=False)
 
 async def task_generate_bdd(ctx: dict, payload: dict) -> dict:
     """Generate BDD artifacts after all graph records are labeled."""
@@ -88,15 +73,13 @@ async def task_generate_bdd(ctx: dict, payload: dict) -> dict:
 
         pending = status["pending_states"] + status["pending_transitions"]
         queued = status["queued_states"] + status["queued_transitions"]
-        if False and (pending or queued):
+        if pending or queued:
             logger.info(
-                "[BDD:%s] Incomplete labeling detected. "
-                "States (Pending: %s, Queued: %s) | Transitions (Pending: %s, Queued: %s)",
-                session_id,
-                status["pending_states"],
-                status["queued_states"],
-                status["pending_transitions"],
-                status["queued_transitions"],
+                f"[BDD:{session_id}] Incomplete labeling detected. "
+                f"States (Pending: {status['pending_states']}, "
+                f"Queued: {status['queued_states']}) | "
+                f"Transitions (Pending: {status['pending_transitions']}, "
+                f"Queued: {status['queued_transitions']})"
             )
             if job_try >= settings.bdd_max_retries:
                 raise RuntimeError(
@@ -129,9 +112,8 @@ async def task_generate_bdd(ctx: dict, payload: dict) -> dict:
                         raise
 
             logger.info(
-                "[BDD:%s] Waiting for labeling completion on attempt %s",
-                session_id,
-                job_try,
+                f"[BDD:{session_id}] Waiting for labeling completion "
+                f"on attempt {job_try}"
             )
             raise Retry(defer=settings.bdd_retry_delay_seconds)
 
@@ -149,34 +131,62 @@ async def task_generate_bdd(ctx: dict, payload: dict) -> dict:
             state_hashes,
         )
 
-    compiled = compile_bdd(flows, outgoing_locators)
+    compiled = compile_bdd(
+        flows,
+        outgoing_locators,
+        split_features=settings.bdd_split_features,
+        feature_similarity_threshold=settings.bdd_feature_similarity_threshold,
+        singleton_merge_threshold=settings.bdd_singleton_merge_threshold,
+    )
     logger.info(
-        "[BDD:%s] Generated feature '%s' with %s scenarios",
-        session_id,
-        compiled.feature_name,
-        len(flows),
+        f"[BDD:{session_id}] Generated {len(compiled.features)} feature(s) "
+        f"with {len(flows)} scenarios"
     )
 
     result_payload = {
         "status": "success",
         "session_id": session_id,
-        "feature_name": compiled.feature_name,
-        "feature_text": compiled.feature_text,
+        "features": [
+            {
+                "id": feature.id,
+                "feature_name": feature.feature_name,
+                "feature_text": feature.feature_text,
+                "scenario_names": feature.scenario_names,
+            }
+            for feature in compiled.features
+        ],
         "states": compiled.states,
         "transitions": compiled.transitions,
         "assertions": {},
         "action_hooks": {},
     }
+    if compiled.feature_name is not None and compiled.feature_text is not None:
+        result_payload["feature_name"] = compiled.feature_name
+        result_payload["feature_text"] = compiled.feature_text
 
-    #! remove this later
-    save_files(results=result_payload)
-
-    # add a job for the code-gen worker 
+    # add a job for the code-gen worker
     await _enqueue_bullmq_job(
         ctx["redis"],
         BULLMQ_QUEUE,
         BULLMQ_JOB_NAME,
         result_payload,
     )
+
+    json_path = "./src/result.json"
+
+    with open(json_path, "w", encoding="utf-8") as f:
+        json.dump(result_payload, f, indent=4, ensure_ascii=False)
+    
+    features_dir =  "./src/features"
+    os.makedirs(features_dir, exist_ok=True)
+
+    for feature in result_payload["features"]:
+        # make filename safe
+        filename = feature["feature_name"].replace(" ", "_").lower()
+
+        feature_path = f"{features_dir}/{filename}.feature"
+
+        with open(feature_path, "w", encoding="utf-8") as f:
+            f.write(feature["feature_text"])
 
     return result_payload

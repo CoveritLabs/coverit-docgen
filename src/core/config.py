@@ -14,6 +14,9 @@ class Settings(BaseSettings):
     context_distance_threshold: float = 0.40
     bdd_retry_delay_seconds: int = 30
     bdd_max_retries: int = 5
+    bdd_split_features: bool = False
+    bdd_feature_similarity_threshold: float = 0.42
+    bdd_singleton_merge_threshold: float = 0.25
 
     # Application
     app_name: str = "DocGen"

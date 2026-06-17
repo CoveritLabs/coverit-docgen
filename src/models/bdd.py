@@ -1,6 +1,6 @@
 from enum import Enum
 from typing import Any
-
+from dataclasses import dataclass
 from pydantic import BaseModel, Field, field_validator
 
 
@@ -70,3 +70,19 @@ class FeaturePlan(BaseModel):
     name: str
     scenarios: list[ScenarioPlan]
 
+
+@dataclass(frozen=True)
+class CompiledFeature:
+    id: str
+    feature_name: str
+    feature_text: str
+    scenario_names: list[str]
+
+
+@dataclass(frozen=True)
+class CompiledBdd:
+    features: list[CompiledFeature]
+    states: dict[str, dict]
+    transitions: dict[str, dict]
+    feature_name: str | None = None
+    feature_text: str | None = None

@@ -1,4 +1,5 @@
 import unittest
+from pathlib import Path
 from unittest.mock import AsyncMock, Mock, patch
 
 from arq import Retry
@@ -105,6 +106,11 @@ class BddCompilerTests(unittest.TestCase):
         )
 
         self.assertEqual(compiled.feature_name, "Shopping User Flows")
+        self.assertEqual(len(compiled.features), 1)
+        self.assertEqual(
+            compiled.features[0].feature_name,
+            "Shopping User Flows",
+        )
         self.assertEqual(
             compiled.feature_text,
             (
@@ -123,6 +129,217 @@ class BddCompilerTests(unittest.TestCase):
         self.assertEqual(
             compiled.transitions["T_OPEN_SHOPPING_CART"]["action"]["stateId"],
             "S_SHOPPING_HOME_PAGE",
+        )
+
+    def test_split_enabled_groups_same_destination_area(self):
+        home = state("s1", "home", "Shop Home Page")
+        search = state("s2", "search", "Shop Search Page")
+        cart = state("s3", "cart", "Shop Cart Page", "https://shop.example.com/cart")
+        cart_review = state(
+            "s4",
+            "cart-review",
+            "Shop Cart Review Page",
+            "https://shop.example.com/cart/review",
+        )
+        account = state(
+            "s5",
+            "account",
+            "Account Settings Page",
+            "https://shop.example.com/account",
+        )
+        flows = [
+            ResolvedFlow(
+                checkpoint=home,
+                transitions=[
+                    transition("t1", "cart", "View Shop Cart", home, cart)
+                ],
+            ),
+            ResolvedFlow(
+                checkpoint=search,
+                transitions=[
+                    transition(
+                        "t2",
+                        "review-cart",
+                        "Review Shop Cart",
+                        search,
+                        cart_review,
+                    )
+                ],
+            ),
+            ResolvedFlow(
+                checkpoint=home,
+                transitions=[
+                    transition(
+                        "t3",
+                        "account",
+                        "Manage Account Settings",
+                        home,
+                        account,
+                    )
+                ],
+            ),
+        ]
+
+        compiled = compile_bdd(
+            flows,
+            {},
+            split_features=True,
+            singleton_merge_threshold=0.50,
+        )
+
+        self.assertEqual(len(compiled.features), 2)
+        self.assertEqual(compiled.features[0].scenario_names, [
+            "View Shop Cart",
+            "Review Shop Cart",
+        ])
+        self.assertEqual(compiled.features[1].scenario_names, [
+            "Manage Account Settings"
+        ])
+        self.assertIsNone(compiled.feature_name)
+        self.assertIsNone(compiled.feature_text)
+
+    def test_semantically_similar_flows_merge_across_different_anchors(self):
+        home = state("s1", "home", "Quote Search Page")
+        author = state(
+            "s2",
+            "author",
+            "Quote Author Details Page",
+            "https://quotes.example.com/author",
+        )
+        list_page = state("s3", "list", "Quote List Page")
+        tag_page = state(
+            "s4",
+            "tag",
+            "Quote Tag Details Page",
+            "https://quotes.example.com/tag",
+        )
+
+        compiled = compile_bdd(
+            [
+                ResolvedFlow(
+                    checkpoint=home,
+                    transitions=[
+                        transition(
+                            "t1",
+                            "author",
+                            "Browse Quote Author Details",
+                            home,
+                            author,
+                        )
+                    ],
+                ),
+                ResolvedFlow(
+                    checkpoint=list_page,
+                    transitions=[
+                        transition(
+                            "t2",
+                            "tag",
+                            "Browse Quote Tag Details",
+                            list_page,
+                            tag_page,
+                        )
+                    ],
+                ),
+            ],
+            {},
+            split_features=True,
+            feature_similarity_threshold=0.30,
+        )
+
+        self.assertEqual(len(compiled.features), 1)
+        self.assertEqual(compiled.features[0].scenario_names, [
+            "Browse Quote Author Details",
+            "Browse Quote Tag Details",
+        ])
+
+    def test_weak_singleton_remains_separate(self):
+        home = state("s1", "home", "Shop Home Page")
+        cart = state("s2", "cart", "Shop Cart Page", "https://shop.example.com/cart")
+        admin = state("s3", "admin", "Admin Root Page")
+        users = state(
+            "s4",
+            "users",
+            "User Management Page",
+            "https://shop.example.com/users",
+        )
+        compiled = compile_bdd(
+            [
+                ResolvedFlow(
+                    checkpoint=home,
+                    transitions=[
+                        transition("t1", "cart", "View Shop Cart", home, cart)
+                    ],
+                ),
+                ResolvedFlow(
+                    checkpoint=admin,
+                    transitions=[
+                        transition(
+                            "t2",
+                            "users",
+                            "Manage User Roles",
+                            admin,
+                            users,
+                        )
+                    ],
+                ),
+            ],
+            {},
+            split_features=True,
+        )
+
+        self.assertEqual(len(compiled.features), 2)
+
+    def test_feature_name_collisions_are_numbered(self):
+        first = state("s1", "first", "Shopping Home Page")
+        cart = state(
+            "s2",
+            "cart",
+            "Shopping Cart Page",
+            "https://shop.example.com/cart",
+        )
+        second = state("s3", "second", "Shopping Search Page")
+        checkout = state(
+            "s4",
+            "checkout",
+            "Shopping Checkout Page",
+            "https://shop.example.com/checkout",
+        )
+        compiled = compile_bdd(
+            [
+                ResolvedFlow(
+                    checkpoint=first,
+                    transitions=[
+                        transition(
+                            "t1",
+                            "cart",
+                            "Open Shopping Cart",
+                            first,
+                            cart,
+                        )
+                    ],
+                ),
+                ResolvedFlow(
+                    checkpoint=second,
+                    transitions=[
+                        transition(
+                            "t2",
+                            "checkout",
+                            "Open Shopping Checkout",
+                            second,
+                            checkout,
+                        )
+                    ],
+                ),
+            ],
+            {},
+            split_features=True,
+            feature_similarity_threshold=1.0,
+            singleton_merge_threshold=1.0,
+        )
+
+        self.assertEqual(
+            [feature.feature_name for feature in compiled.features],
+            ["Shopping User Flows 1", "Shopping User Flows 2"],
         )
 
     def test_duplicate_labels_number_every_collision(self):
@@ -354,6 +571,72 @@ class BddTaskTests(unittest.IsolatedAsyncioTestCase):
             ["s1"],
             [],
         )
+
+    async def test_success_payload_contains_features_and_bullmq_job(self):
+        home = state("s1", "home", "Shopping Home Page")
+        cart = state("s2", "cart", "Shopping Cart Page")
+        flow = ResolvedFlow(
+            checkpoint=home,
+            transitions=[
+                transition("t1", "open-cart", "Open Shopping Cart", home, cart)
+            ],
+        )
+        repo = Mock()
+        repo.get_labeling_status = AsyncMock(
+            return_value={
+                "state_count": 2,
+                "transition_count": 1,
+                "pending_states": 0,
+                "pending_transitions": 0,
+                "queued_states": 0,
+                "queued_transitions": 0,
+                "invalid_states": 0,
+                "invalid_transitions": 0,
+            }
+        )
+        repo.resolve_flows = AsyncMock(return_value=[flow])
+        repo.get_outgoing_locators = AsyncMock(return_value={"home": ["#cart"]})
+        redis = Mock()
+
+        with (
+            patch("src.tasks.bdd.neo_manager.driver", Driver(Mock())),
+            patch("src.tasks.bdd.BddRepository", return_value=repo),
+            patch("src.tasks.bdd._enqueue_bullmq_job", new=AsyncMock()) as enqueue,
+        ):
+            result = await task_generate_bdd(
+                {"redis": redis, "job_try": 1},
+                {
+                    "session_id": "session",
+                    "flows": [
+                        {
+                            "checkpoint_hash": "home",
+                            "transition_ids": ["open-cart"],
+                        }
+                    ],
+                },
+            )
+
+        self.assertEqual(len(result["features"]), 1)
+        self.assertEqual(result["feature_name"], "Shopping User Flows")
+        self.assertIn("feature_text", result)
+        enqueue.assert_awaited_once()
+        self.assertFalse(Path("src/session.feature").exists())
+
+
+class LoggingStyleTests(unittest.TestCase):
+    def test_src_logger_calls_do_not_use_percent_args(self):
+        root = Path(__file__).resolve().parents[1] / "src"
+        offenders: list[str] = []
+        for path in root.rglob("*.py"):
+            text = path.read_text(encoding="utf-8")
+            for line_number, line in enumerate(text.splitlines(), start=1):
+                if "logger." not in line:
+                    continue
+                if '"%s"' in line or "'%s'" in line:
+                    offenders.append(f"{path}:{line_number}")
+                if '"%d"' in line or "'%d'" in line:
+                    offenders.append(f"{path}:{line_number}")
+        self.assertEqual(offenders, [])
 
 
 if __name__ == "__main__":
