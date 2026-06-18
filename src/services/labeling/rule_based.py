@@ -2,8 +2,8 @@ import uuid
 from typing import Dict
 
 from bs4 import BeautifulSoup
-from playwright.async_api import async_playwright
 
+from src.core.playwright import playwright_manager
 from src.models.graph import (
     CrawlerGraph,
     CrawlerState,
@@ -18,47 +18,9 @@ from src.services.labeling.page_analyzer import get_page_info
 from src.utils.html_tools import clean_element
 
 
-async def handle_locator(html: str, locator: str) -> tuple[str, str]:
-    """Mark the first Playwright locator match and return the updated HTML.
-
-    Args:
-        html: Complete origin-page HTML.
-        locator: Playwright locator expression for the interacted element.
-
-    Returns:
-        A tuple containing serialized HTML and the temporary marker value.
-
-    Raises:
-        ValueError: If HTML or locator metadata is missing.
-        playwright.async_api.Error: If the locator cannot be evaluated.
-    """
-    if not html.strip():
-        raise ValueError("Origin state HTML is empty")
-    if not locator or not locator.strip():
-        raise ValueError("Transition locator is empty")
-
-    async with async_playwright() as playwright:
-        browser = await playwright.chromium.launch(headless=True)
-        try:
-            page = await browser.new_page()
-            await page.set_content(html)
-            element = page.locator(locator).first
-            if await element.count() == 0:
-                raise ValueError(f"Transition locator did not match: {locator}")
-
-            unique_id = f"pw-bridge-{uuid.uuid4().hex[:8]}"
-            await element.evaluate(
-                "(node, marker) => node.setAttribute(" '"data-pw-locator", marker)',
-                unique_id,
-            )
-            return await page.content(), unique_id
-        finally:
-            await browser.close()
-
-
 def label_crawler_state(state: CrawlerState) -> LabeledState:
     """Create a page-level label for one crawler state."""
-    soup = BeautifulSoup(state.html or "", "html.parser")
+    soup = BeautifulSoup(state.html, "html.parser")
     page_info = get_page_info(state.url, soup)
     return LabeledState(
         id=state.id,
@@ -75,7 +37,7 @@ async def label_crawler_transition(
     Missing HTML, locator metadata, or locator matches are treated as labeling
     failures so callers can return only that transition to ``PENDING``.
     """
-    modified_html, element_id = await handle_locator(
+    modified_html, element_id = await playwright_manager.resolve_locator(
         from_state.html, transition.locator
     )
     soup = BeautifulSoup(modified_html, "html.parser")
@@ -87,8 +49,17 @@ async def label_crawler_transition(
     name = labeler.get_element_name(element, soup.html or soup)
     if not name or not name.strip():
         raise ValueError("Transition element produced an empty label")
+    
+    action_value = transition.action_value
+    value = None
+    if len(action_value) == 1 and action_value[0]["t"] not in ['click', 'press']:
+        value = action_value[0]['v']
+        if action_value[0]['t'] == "select":
+            option_tag = element.find('option', value=value)
+            option_text = option_tag and option_tag.get_text(strip=True)
+            value = option_text or value
 
-    action = ActionDescription().get_action_description(element, name)
+    action = ActionDescription().get_action_description(element, name, value)
     if not action or not action.strip():
         raise ValueError("Transition element produced an empty action")
 
