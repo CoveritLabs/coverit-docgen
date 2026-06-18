@@ -3,11 +3,7 @@ from typing import Optional
 from bs4 import Tag
 from src.services.labeling.constants import TEXT_INPUT_TYPES
 from src.services.labeling.labeling import Labeling
-from src.utils.html_tools import (
-    get_input_value,
-    get_select_value,
-    is_readable,
-)
+from src.utils.html_tools import is_readable
 
 
 @dataclass(frozen=True)
@@ -21,26 +17,38 @@ class ActionContext:
     role: str
     in_nav: bool
     image_only: bool
-    input_value: Optional[str]
-    select_value: Optional[str]
-    textarea_value: Optional[str]
+    value: Optional[str]
 
 
 class ActionDescription:
     """Generates human-readable action descriptions for HTML elements."""
 
     INPUT_MAP = {
+        "submit": lambda name: f'Press "{name}"',
         "checkbox": lambda name: f'Toggle "{name}"',
         "switch": lambda name: f'Toggle "{name}"',
         "radio": lambda name: f'Select "{name}"',
         "option": lambda name: f'Select "{name}"',
-        "link": lambda name: f'Go to "{name}"',
-        "file": lambda name: f'Upload "{name}"',
+        "file": lambda name: f'Upload a file for "{name}"',
         "tab": lambda name: f'Switch to "{name}" tab',
         "menuitem": lambda name: f'Click on "{name}" menu item',
     }
 
-    def _build_context(self, el: Tag, name: str) -> ActionContext:
+    SITUATION_MAP = {
+        "image": lambda name: f'Click on image "{name}"',
+        "link": lambda name: f'Click link "{name}"',
+        "link_in_nav": lambda name: f'Navigate to "{name}"',
+        "button": lambda name: f'Click "{name}" button',
+        "input": lambda name: f'Fill out the "{name}" input',
+        "select": lambda name: f'Select from "{name}" Filter',
+        "textarea": lambda name: f'Type in "{name}"',
+        "input_with_value": lambda name, value: f'Fill "{name}" with "{value}"',
+        "select_with_value": lambda name, value: f'Select "{value}" from "{name}" Filter',
+        "textarea_with_value": lambda name, value: f'Type "{value}" ' f'in "{name}"',
+        "FALLBACK": lambda name: f'Click "{name}"',
+    }
+
+    def _build_context(self, el: Tag, name: str, value: str | None) -> ActionContext:
         """Build an ActionContext from a BeautifulSoup element."""
 
         if el is None:
@@ -74,63 +82,58 @@ class ActionDescription:
             role=role,
             in_nav=in_nav,
             image_only=has_img and not has_text,
-            input_value=get_input_value(el),
-            select_value=get_select_value(el),
-            textarea_value=Labeling.get_name_from_text(el),
+            value=value,
         )
-
-    def _image_description(self, context: ActionContext) -> str:
-        return f'Click on image "{context.name}"'
 
     def _anchor_description(self, context: ActionContext) -> str:
         if context.image_only:
-            return self._image_description(context)
+            return self.SITUATION_MAP["image"](context.name)
 
         if context.in_nav:
-            return f'Navigate to "{context.name}"'
+            return self.SITUATION_MAP["link_in_nav"](context.name)
 
-        return f'Go to "{context.name}"'
+        return self.SITUATION_MAP["link"](context.name)
 
     def _button_description(self, context: ActionContext) -> str:
         if context.image_only:
-            return self._image_description(context)
+            return self.SITUATION_MAP["image"](context.name)
 
-        return f'Click "{context.name}"'
+        return self.SITUATION_MAP["button"](context.name)
 
     def _text_input_description(self, context: ActionContext) -> str:
-        if context.input_value:
-            if context.el_type == "search":
-                return f'Search for "{context.input_value}" ' f'in "{context.name}"'
-
-            return f'Enter "{context.input_value}" ' f'in "{context.name}"'
-
-        if context.el_type == "search":
-            return f'Search "{context.name}"'
-
-        return f'Enter "{context.name}"'
+        #! type search does not mean that it is the only type that is use for searching
+        #! we need to get the actual input value because the html does not record the input written in the input field.
+        #! the only logical option right now is to say enter something in the input with label "name"
+        # ? What should we now:
+        # ? 1- Get the input values from the crawler
+        # ? 2- use these input values but we still do not know if the input is meant for search or what.
+        if context.value:
+            return self.SITUATION_MAP["input_with_value"](context.name, context.value)
+        return self.SITUATION_MAP["input"](context.name)
 
     def _input_description(self, context: ActionContext) -> str:
         if context.el_type in self.INPUT_MAP:
             return self.INPUT_MAP[context.el_type](context.name)
-
-        return f'Enter "{context.name}"'
+        return self.SITUATION_MAP["input"](context.name)
 
     def _select_description(self, context: ActionContext) -> str:
-        if context.select_value:
-            return f'Select "{context.select_value}" ' f'from "{context.name}"'
-
-        return f'Select from "{context.name}"'
+        #! can we really get the value ourselves or we need the crawler to give us the value also ?
+        if context.value:
+            return self.SITUATION_MAP["select_with_value"](context.name, context.value)
+        return self.SITUATION_MAP["select"](context.name)
 
     def _textarea_description(self, context: ActionContext) -> str:
-        if context.textarea_value:
-            return f'Type "{context.textarea_value}" ' f'in "{context.name}"'
+        #! does the textarea value is taken from crawler also?
+        if context.value:
+            return self.SITUATION_MAP["textarea_with_value"](
+                context.name, context.value
+            )
+        return self.SITUATION_MAP["textarea"](context.name)
 
-        return f'Type in "{context.name}"'
-
-    def get_action_description(self, el: Tag, name: str) -> str:
+    def get_action_description(self, el: Tag, name: str, value: str | None) -> str:
         """Return a human-readable action description for an element."""
 
-        context = self._build_context(el, name)
+        context = self._build_context(el, name, value)
 
         if context.tag == "a":
             return self._anchor_description(context)
@@ -158,6 +161,6 @@ class ActionDescription:
             return self.INPUT_MAP[context.role](context.name)
 
         if context.image_only:
-            return self._image_description(context)
+            return self.SITUATION_MAP["image"](context.name)
 
-        return f'Click "{context.name}"'
+        return self.SITUATION_MAP["FALLBACK"](context.name)

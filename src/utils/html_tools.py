@@ -83,39 +83,6 @@ def clean_element(el: Tag) -> str:
     clean_tag(el_copy)
     return str(el_copy)
 
-
-def get_input_value(el):
-    """
-    Extract a readable value from an input element.
-    """
-    if el is None or isinstance(el, NavigableString):
-        return None
-    val = el.get("value", "")
-    if isinstance(val, str):
-        val = val.strip()
-        if val and is_readable(val):
-            return val
-    return None
-
-
-def get_select_value(el):
-    """Get the selected option's text from a <select> element."""
-    if el is None or not isinstance(el, Tag):
-        return None
-    selected = el.find("option", selected=True)
-    if selected:
-        text = selected.get_text(strip=True)
-        if text and is_readable(text):
-            return text
-    # Fallback: first option
-    first = el.find("option")
-    if first:
-        text = first.get_text(strip=True)
-        if text and is_readable(text):
-            return text
-    return None
-
-
 def get_bbox(tag):
     try:
         return {
