@@ -101,12 +101,6 @@ class ActionDescription:
         return self.SITUATION_MAP["button"](context.name)
 
     def _text_input_description(self, context: ActionContext) -> str:
-        #! type search does not mean that it is the only type that is use for searching
-        #! we need to get the actual input value because the html does not record the input written in the input field.
-        #! the only logical option right now is to say enter something in the input with label "name"
-        # ? What should we now:
-        # ? 1- Get the input values from the crawler
-        # ? 2- use these input values but we still do not know if the input is meant for search or what.
         if context.value:
             return self.SITUATION_MAP["input_with_value"](context.name, context.value)
         return self.SITUATION_MAP["input"](context.name)
@@ -117,13 +111,11 @@ class ActionDescription:
         return self.SITUATION_MAP["input"](context.name)
 
     def _select_description(self, context: ActionContext) -> str:
-        #! can we really get the value ourselves or we need the crawler to give us the value also ?
         if context.value:
             return self.SITUATION_MAP["select_with_value"](context.name, context.value)
         return self.SITUATION_MAP["select"](context.name)
 
     def _textarea_description(self, context: ActionContext) -> str:
-        #! does the textarea value is taken from crawler also?
         if context.value:
             return self.SITUATION_MAP["textarea_with_value"](
                 context.name, context.value
