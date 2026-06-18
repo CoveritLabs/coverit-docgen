@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import Optional, List, Dict, Set
+from typing import Optional, List, Dict, Set, Any
 
 
 class BoundingBox(BaseModel):
@@ -20,6 +20,7 @@ class CrawlerTransition(BaseModel):
     from_state_id: str
     to_state_id: str
     locator: str
+    action_value: List[Dict[str, Any]]
 
 
 class LabeledTransition(BaseModel):

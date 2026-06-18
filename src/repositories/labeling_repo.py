@@ -1,4 +1,5 @@
 import logging
+import json
 
 from neo4j import AsyncSession
 
@@ -82,12 +83,13 @@ class LabelingRepository:
             raise ValueError(
                 f"Transition {transition_id} connects states from different sessions"
             )
-
+        parsed_action = json.loads(record["action_value"]) if record["action_value"] else []
         return CrawlerTransition(
             id=transition_id,
             from_state_id=record["from_id"],
             to_state_id=record["to_id"],
             locator=record["locator"] or "",
+            action_value=parsed_action
         )
 
     async def get_graph(self, session_id: str) -> CrawlerGraph | None:
@@ -115,12 +117,14 @@ class LabelingRepository:
             GET_QUEUED_SESSION_TRANSITIONS, session_id=session_id
         )
         async for record in transitions_result:
+            parsed_action = json.loads(record["action_value"]) if record["action_value"] else []
             transitions.append(
                 CrawlerTransition(
                     id=record["id"],
                     from_state_id=record["from_id"],
                     to_state_id=record["to_id"],
                     locator=record["locator"] or "",
+                    action_value=parsed_action
                 )
             )
             if record["from_id"] not in states:
