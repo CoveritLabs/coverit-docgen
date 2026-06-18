@@ -309,16 +309,26 @@ class Labeling:
                     "dy": dy,
                 }
 
+        element_name = (el.name or "").lower().capitalize()
+
         if best:
             normalized_dx = abs(best["dx"]) / root_box["width"]
             normalized_dy = abs(best["dy"]) / root_box["height"]
             if max(normalized_dx, normalized_dy) <= settings.context_distance_threshold:
                 direction = self._relative_direction(best["dx"], best["dy"])
-                return f"{direction} the {best['type']} '{best['text']}'"
+                return (
+                    element_name
+                    + " "
+                    + f"{direction} the {best['type']} '{best['text']}'"
+                )
 
         normalized_x = min(1.0, max(0.0, (tx - root_box["x"]) / root_box["width"]))
         normalized_y = min(1.0, max(0.0, (ty - root_box["y"]) / root_box["height"]))
-        return self._absolute_screen_position(normalized_x, normalized_y)
+        return (
+            element_name
+            + " "
+            + self._absolute_screen_position(normalized_x, normalized_y)
+        )
 
     @staticmethod
     def _relative_direction(dx: float, dy: float) -> str:

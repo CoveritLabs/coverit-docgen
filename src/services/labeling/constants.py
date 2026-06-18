@@ -12,7 +12,7 @@ KEEP_ATTRS = {
     "for",
     "onclick",
 }
-TEXT_INPUT_TYPES = {"text", "search", "email", "url", "tel", "password", "number", ""}
+TEXT_INPUT_TYPES = {"text", "search", "email", "url", "tel", "password", "number"}
 INTERACTIVE_TAGS = {"a", "button", "input", "textarea", "select"}
 INTERACTIVE_ROLES = {
     "button",
@@ -27,7 +27,7 @@ INTERACTIVE_ROLES = {
 
 # attributes to be used for extracting the element name from it
 #! order matters
-NAME_ATTRS = {"aria-label", "title", "alt", "placeholder", "name"}
+NAME_ATTRS = {"aria-label", "title", "alt", "placeholder", "value", "name"}
 
 MAX_DEPTH = 5
 
