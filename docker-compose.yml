@@ -46,7 +46,6 @@ services:
       db:
         condition: service_healthy
     restart: unless-stopped
-    command: ["arq", "src.worker.WorkerSettings"]
     volumes:
       - docgen_logs:/app/logs
 

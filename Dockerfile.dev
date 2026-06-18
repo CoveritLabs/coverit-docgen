@@ -19,4 +19,4 @@ RUN playwright install --with-deps chromium
 ENV ENVIRONMENT=development
 ENV PYTHONUNBUFFERED=1
 
-CMD ["watchfiles", "arq worker.WorkerSettings", "src", "worker.py"]
+CMD ["watchfiles", "arq src.worker.WorkerSettings", "src"]
