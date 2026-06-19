@@ -33,6 +33,7 @@ WHERE elementId(t) = $id
 RETURN elementId(from) AS from_id,
        elementId(to) AS to_id,
        t.locator_value AS locator,
+       t.action_value AS action_value,
        from.session_id AS session_id,
        to.session_id AS to_session_id
 """
@@ -166,6 +167,7 @@ RETURN elementId(t) AS id,
        elementId(from) AS from_id,
        elementId(to) AS to_id,
        t.locator_value AS locator,
+       t.action_value AS action_value,
        from.html AS from_html,
        from.url AS from_url
 """

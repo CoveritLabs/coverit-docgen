@@ -138,7 +138,7 @@ class ActionDescription:
             return self._button_description(context)
 
         if context.tag == "input":
-            if context.el_type in TEXT_INPUT_TYPES:
+            if not context.el_type or context.el_type in TEXT_INPUT_TYPES:
                 return self._text_input_description(context)
 
             return self._input_description(context)

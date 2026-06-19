@@ -29,7 +29,9 @@ class Settings(BaseSettings):
     db_password: str = "postgres"
     db_name: str = "postgres"
 
-    database_url: str = "postgresql+asyncpg://postgres:postgres@db:5432/coverit?schema=public"
+    database_url: str = (
+        "postgresql+asyncpg://postgres:postgres@db:5432/coverit?schema=public"
+    )
 
     # External Services
     redis_url: str = "redis://redis:6379"

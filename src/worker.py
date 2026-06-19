@@ -11,6 +11,7 @@ import json
 
 from arq import cron, func
 
+from src.core.playwright import playwright_manager
 from src.core.database import session_manager
 from src.core.neo import neo_manager
 from src.core.redis import redis_settings
@@ -33,6 +34,7 @@ async def startup(ctx: dict) -> None:
     """Initialize database clients and immediately poll for queued work."""
     await session_manager.init()
     neo_manager.init()
+    await playwright_manager.start()
     logger.info("Worker initialized database connections")
 
     with open("./src/all_flows.json") as f:
@@ -49,17 +51,20 @@ async def startup(ctx: dict) -> None:
                 for flow in flows
             ]
         )
-    payload = {"session_id": "4a777fa0-7880-42a9-a237-ae3675eabb01", "flows": all_flows}
+    payload = {"session_id": "8d03dd93-1cba-4ad1-8f72-a20caf5519e8", "flows": all_flows}
+
     await ctx["redis"].enqueue_job(
         "task_generate_bdd",
         payload=payload,
     )
+    # await cron_poll_unlabeled_data(ctx)
 
 
 async def shutdown(ctx: dict) -> None:
     """Close database clients during worker shutdown."""
     await session_manager.close()
     await neo_manager.close()
+    await playwright_manager.stop()
     logger.info("Worker closed database connections")
 
 

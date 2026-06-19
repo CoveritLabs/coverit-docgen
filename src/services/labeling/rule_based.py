@@ -37,37 +37,62 @@ async def label_crawler_transition(
     Missing HTML, locator metadata, or locator matches are treated as labeling
     failures so callers can return only that transition to ``PENDING``.
     """
-    modified_html, element_id = await playwright_manager.resolve_locator(
-        from_state.html, transition.locator
-    )
-    soup = BeautifulSoup(modified_html, "html.parser")
-    element = soup.find(attrs={"data-pw-locator": element_id})
-    if element is None:
-        raise ValueError("Marked transition element was not found in parsed HTML")
+
+    async def get_element(locator: str):
+        modified_html, element_id = await playwright_manager.resolve_locator(
+            from_state.html, locator
+        )
+        soup = BeautifulSoup(modified_html, "html.parser")
+        element = soup.find(attrs={"data-pw-locator": element_id})
+        if element is None:
+            raise ValueError("Marked transition element was not found in parsed HTML")
+        return element, soup
+
+    def resolve_action_value(action_type: str, value: str | None, element):
+        """Normalize the raw action value for description generation."""
+
+        if not value or not value.strip():
+            return None
+
+        if action_type == "select":
+            option_tag = element.find("option", value=value)
+            option_text = option_tag and option_tag.get_text(strip=True)
+            return option_text or value
+
+        return value
 
     labeler = Labeling()
-    name = labeler.get_element_name(element, soup.html or soup)
-    if not name or not name.strip():
-        raise ValueError("Transition element produced an empty label")
-    
-    action_value = transition.action_value
-    value = None
-    if len(action_value) == 1 and action_value[0]["t"] not in ['click', 'press']:
-        value = action_value[0]['v']
-        if action_value[0]['t'] == "select":
-            option_tag = element.find('option', value=value)
-            option_text = option_tag and option_tag.get_text(strip=True)
-            value = option_text or value
+    action_describer = ActionDescription()
+    action_parts: list[str] = []
+    last_element = None
+    last_name = None
 
-    action = ActionDescription().get_action_description(element, name, value)
-    if not action or not action.strip():
+    if not transition.action_value:
+        raise ValueError("Transition has no action values to label")
+
+    for action in transition.action_value:
+        element, soup = await get_element(action["s"])
+        last_element = element
+
+        name = labeler.get_element_name(element, soup.html or soup)
+        if not name or not name.strip():
+            raise ValueError("Transition element produced an empty label")
+
+        last_name = name
+        resolved_value = resolve_action_value(action["t"], action.get("v"), element)
+        action_parts.append(
+            action_describer.get_action_description(element, name, resolved_value)
+        )
+
+    full_action = " then ".join(action_parts).strip()
+    if not full_action:
         raise ValueError("Transition element produced an empty action")
 
     return LabeledTransition(
         id=transition.id,
-        html_snippet=clean_element(element),
-        name=name,
-        action=action,
+        html_snippet=clean_element(last_element),
+        name=last_name,
+        action=full_action,
     )
 
 
