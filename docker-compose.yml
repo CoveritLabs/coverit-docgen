@@ -1,83 +1,47 @@
 # Copyright (c) 2026 CoverIt Labs. All Rights Reserved.
-name: coverit-docgen
 
 services:
-  worker:
-    image: ghcr.io/coveritlabs/coverit-docgen:${API_TAG:-dev}
+  docgen:
+    image: ghcr.io/coveritlabs/coverit-docgen:${DOCGEN_TAG:-dev}
     pull_policy: always
-    container_name: docgen-worker
+    container_name: coverit-docgen
+    env_file:
+      - path: ${DOCGEN_DIR}/.env
+        required: false
     environment:
-        # Python
-        - PYTHONUNBUFFERED=1
+      # Python
+      - PYTHONUNBUFFERED=1
 
-        # Application
-        - APP_NAME=${APP_NAME:-DocGen}
-        - APP_VERSION=${APP_VERSION:-1.0.0}
-        - DEBUG=${DEBUG:-False}
-        - ENVIRONMENT=${ENVIRONMENT:-development}
+      # Application
+      - APP_NAME=${APP_NAME:-DocGen}
+      - APP_VERSION=${APP_VERSION:-1.0.0}
+      - DEBUG=${DEBUG:-False}
+      - ENVIRONMENT=${ENVIRONMENT:-development}
 
-        # Constants
-        - MAX_SESSIONS_PER_POLL=${MAX_SESSIONS_PER_POLL:-5}
-        - CONTEXT_DISTANCE_THRESHOLD=${CONTEXT_DISTANCE_THRESHOLD:-0.40}
-        - BDD_RETRY_DELAY_SECONDS=${BDD_RETRY_DELAY_SECONDS:-30}
-        - BDD_MAX_RETRIES=${BDD_MAX_RETRIES:-5}
+      # Constants
+      - MAX_SESSIONS_PER_POLL=${MAX_SESSIONS_PER_POLL:-5}
+      - CONTEXT_DISTANCE_THRESHOLD=${CONTEXT_DISTANCE_THRESHOLD:-0.40}
+      - BDD_RETRY_DELAY_SECONDS=${BDD_RETRY_DELAY_SECONDS:-30}
+      - BDD_MAX_RETRIES=${BDD_MAX_RETRIES:-5}
 
-        # Database
-        - DB_USER=${DB_USER:-postgres}
-        - DB_PASSWORD=${DB_PASSWORD:-postgres}
-        - DB_NAME=${DB_NAME:-postgres}
-        - DATABASE_URL=${DATABASE_URL:-postgresql+asyncpg://postgres:postgres@db:5432/coverit?schema=public}
+      # External Services
+      - NEO4J_URL=${NEO4J_URL:-bolt://neo4j:7687}
+      - NEO4J_USERNAME=${NEO4J_USERNAME:-neo4j}
+      - NEO4J_PASSWORD=${NEO4J_PASSWORD:-password}
 
-        # External Services
-        - REDIS_URL=${REDIS_URL:-redis://redis:6379}
-        - NEO4J_URL=${NEO4J_URL:-bolt://neo4j:7687}
-        - NEO4J_USERNAME=${NEO4J_USERNAME:-neo4j}
-        - NEO4J_PASSWORD=${NEO4J_PASSWORD:-password}
+      # Poller
+      - POLLER_CRON_HOURS=${POLLER_CRON_HOURS:-0,4,8,12,16,20}
+      - POLLER_CRON_MINUTES=${POLLER_CRON_MINUTES:-0}
+      - JIRA_REPORT_CRON_MINUTES=${JIRA_REPORT_CRON_MINUTES:-0,15,30,45}
+      - JIRA_REPORT_POLL_BATCH_SIZE=${JIRA_REPORT_POLL_BATCH_SIZE:-3}
 
-        # Poller
-        - POLLER_CRON_HOURS=${POLLER_CRON_HOURS:-0,4,8,12,16,20}
-        - POLLER_CRON_MINUTES=${POLLER_CRON_MINUTES:-0}
-
-        # CORS
-        - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-["http://localhost:3000"]}
-    depends_on:
-      redis:
-        condition: service_healthy
-      db:
-        condition: service_healthy
+      # CORS
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-["http://localhost:3000"]}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     restart: unless-stopped
     volumes:
       - docgen_logs:/app/logs
 
-  db:
-    image: postgres:18
-    container_name: docgen-postgres
-    environment:
-      - POSTGRES_USER=${DB_USER:-postgres}
-      - POSTGRES_PASSWORD=${DB_PASSWORD:-postgres}
-      - POSTGRES_DB=${DB_NAME:-coverit}
-    volumes:
-      - postgres_data:/var/lib/postgresql
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres}"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-    restart: unless-stopped
-
-  redis:
-    image: redis:7-alpine
-    container_name: docgen-redis
-    ports:
-      - "6379:6379"
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-    restart: unless-stopped
-
 volumes:
   docgen_logs:
-  postgres_data:
-  redis_data:

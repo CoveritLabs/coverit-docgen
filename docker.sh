@@ -5,10 +5,10 @@
 # See LICENSE file in the project root for full license information.
 
 # Usage:
-#   ./docker.sh up                   → remote image + cloud db/redis
-#   ./docker.sh up --local           → local dev build + hot-reload + local db/redis
-#   ./docker.sh up --test-prod       → local prod build + cloud db/redis
-#   ./docker.sh up --tag latest      → remote image (specific tag) + cloud db/redis
+#   ./docker.sh up                   -> remote image + external Redis/API
+#   ./docker.sh up --local           -> local dev build + shared/fallback Redis
+#   ./docker.sh up --test-prod       -> local prod build + external Redis/API
+#   ./docker.sh up --tag latest      -> remote image with specific tag
 
 print_help() {
   echo "Usage: $0 [up|down|logs] [--tag <tag>] [--local] [--test-prod]"
@@ -17,19 +17,18 @@ print_help() {
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-export API_DIR="$SCRIPT_DIR"
+export DOCGEN_DIR="$SCRIPT_DIR"
 
 CMD="${1:-up}"
 shift 2>/dev/null || true
 
-# Defaults
-export API_TAG="dev"
+export DOCGEN_TAG="dev"
 LOCAL=false
 TEST_PROD=false
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --tag) export API_TAG="$2"; shift 2 ;;
+    --tag) export DOCGEN_TAG="$2"; shift 2 ;;
     --local) LOCAL=true; shift ;;
     --test-prod) TEST_PROD=true; shift ;;
     -h|--help) print_help; exit 0 ;;
@@ -37,21 +36,60 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-# Only --local uses local db/redis. Everything else connects to cloud.
+ENV_FILE_ARG=""
+if [ -f "$DOCGEN_DIR/.env" ]; then
+  ENV_FILE_ARG="--env-file $DOCGEN_DIR/.env"
+fi
+
+host_redis_exists() {
+  if docker ps --filter "name=^/coverit-redis$" --format "{{.Names}}" 2>/dev/null | grep -qx "coverit-redis"; then
+    return 0
+  fi
+
+  if docker ps --filter "publish=6379" --format "{{.Names}}" 2>/dev/null | grep -q .; then
+    return 0
+  fi
+
+  if command -v nc >/dev/null 2>&1 && nc -z 127.0.0.1 6379 >/dev/null 2>&1; then
+    return 0
+  fi
+
+  return 1
+}
+
+EXEC_CMD="docker compose $ENV_FILE_ARG -f $DOCGEN_DIR/docker-compose.yml"
+
 if [ "$LOCAL" = true ]; then
-  echo "Starting DocGen Service in local dev mode (local db + redis)..."
-  EXEC_CMD="docker compose -f docker-compose.yml -f overrides/api.dev.yml"
+  echo "Starting DocGen in local dev mode..."
+
+  if [ -z "$API_BASE_URL" ]; then
+    export API_BASE_URL="http://host.docker.internal:3000/api/v1"
+  fi
+
+  if [ "$CMD" = "down" ]; then
+    EXEC_CMD="$EXEC_CMD -f $DOCGEN_DIR/docker-compose.redis.yml"
+  elif [ -n "$REDIS_URL" ]; then
+    echo "Using REDIS_URL from environment."
+  elif host_redis_exists; then
+    export REDIS_URL="redis://host.docker.internal:6379"
+    echo "Using existing Redis on host port 6379."
+  else
+    echo "No existing Redis detected; starting DocGen internal Redis."
+    EXEC_CMD="$EXEC_CMD -f $DOCGEN_DIR/docker-compose.redis.yml"
+  fi
+
+  EXEC_CMD="$EXEC_CMD -f $DOCGEN_DIR/overrides/standalone.local.yml -f $DOCGEN_DIR/overrides/api.dev.yml"
 elif [ "$TEST_PROD" = true ]; then
-  echo "Starting DocGen Service in Production Test mode (local prod build + cloud)..."
-  EXEC_CMD="docker compose -f docker-compose.yml -f overrides/api.cloud.yml -f overrides/api.test.yml"
+  echo "Starting DocGen in Production Test mode (local prod build + external Redis/API)..."
+  EXEC_CMD="$EXEC_CMD -f $DOCGEN_DIR/overrides/api.cloud.yml -f $DOCGEN_DIR/overrides/api.test.yml"
 else
-  echo "Starting DocGen Service with remote images (Tag: $API_TAG) + cloud..."
-  EXEC_CMD="docker compose -f docker-compose.yml -f overrides/api.cloud.yml"
+  echo "Starting DocGen with remote image (DOCGEN_TAG=$DOCGEN_TAG) + external Redis/API..."
+  EXEC_CMD="$EXEC_CMD -f $DOCGEN_DIR/overrides/api.cloud.yml"
 fi
 
 case "$CMD" in
   up)
-    $EXEC_CMD up --build -d --remove-orphans
+    $EXEC_CMD up -d --build --remove-orphans
     ;;
   down)
     $EXEC_CMD down --remove-orphans
