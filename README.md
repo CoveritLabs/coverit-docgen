@@ -7,7 +7,6 @@
 - Python 3.10+; production image uses Python 3.11.
 - ARQ async worker and cron scheduling over Redis.
 - Neo4j async driver for session graphs and labeling status.
-- PostgreSQL with SQLAlchemy async and `asyncpg`; ORM models exist for labeled artifacts.
 - Pydantic and `pydantic-settings` for data models and environment configuration.
 - Beautiful Soup for HTML parsing.
 - Playwright Chromium for resolving transition locators.
@@ -25,7 +24,7 @@
 - `src/repositories/labeling_repo.py`: Neo4j persistence boundary.
 - `src/models/queries.py`: centralized Cypher statements.
 - `src/services/labeling/`: page analysis, element naming, action descriptions, and Playwright-based transition labeling.
-- `src/core/`: settings, logging, Neo4j, Redis, and PostgreSQL lifecycle management.
+- `src/core/`: settings, logging, Neo4j, Redis, and Playwright lifecycle management.
 - `src/services/bdd`, `guides`, and `video` currently contain placeholders and no implemented business logic.
 
 ## Existing Data Models
@@ -43,10 +42,7 @@
   - `CrawlerState`, `CrawlerTransition`, `CrawlerGraph`.
   - `LabeledState`, `LabeledTransition`, `LabeledGraph`.
   - `CrawlerGraph.skip_states` identifies origin states loaded only as transition context.
-- PostgreSQL ORM models:
-  - `labeled_states(state_id, name, description)`.
-  - `labeled_elements(element_id, html_snippet, name, action)`.
-- The active labeling workflow currently reads and writes labels directly in Neo4j.
+- The active labeling workflow reads and writes labels directly in Neo4j.
 
 ## Features Already Implemented
 - Incremental graph polling:
@@ -94,7 +90,7 @@
 - Logging must be initialized before importing modules that create loggers.
 
 ## Existing Constraints
-- Labeling operations and database access are asynchronous.
+- Labeling operations and Neo4j access are asynchronous.
 - Playwright-dependent transition labeling must be awaited.
 - Missing transition HTML, locator metadata, locator matches, names, or actions are failures and must not be saved as completed.
 - Completed records must never be reclaimed or relabeled.
@@ -104,7 +100,7 @@
 - `max_sessions_per_poll` and `context_distance_threshold` are settings; the current defaults are `5` and `0.40`.
 
 ## Coding Conventions In This Project
-- Use async functions for database, ARQ, and Playwright workflows.
+- Use async functions for Neo4j, ARQ, and Playwright workflows.
 - Keep Cypher in `src/models/queries.py`.
 - Keep Neo4j access behind `LabelingRepository`.
 - Keep orchestration in `src/tasks` and semantic logic in `src/services`.
