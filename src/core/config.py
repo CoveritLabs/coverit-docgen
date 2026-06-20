@@ -24,15 +24,6 @@ class Settings(BaseSettings):
     debug: bool = False
     environment: str = "development"
 
-    # Database
-    db_user: str = "postgres"
-    db_password: str = "postgres"
-    db_name: str = "postgres"
-
-    database_url: str = (
-        "postgresql+asyncpg://postgres:postgres@db:5432/coverit?schema=public"
-    )
-
     # External Services
     redis_url: str = "redis://redis:6379"
     neo4j_url: str = "bolt://localhost:7687"
