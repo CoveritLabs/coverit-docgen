@@ -2,13 +2,11 @@
 # Proprietary and confidential. Unauthorized use is strictly prohibited.
 # See LICENSE file in the project root for full license information.
 
-# Cloud override - points DocGen at externally provided services.
-# Requires REDIS_URL, API_BASE_URL, and INTERNAL_SERVICE_TOKEN in .env/env.
+# Used by coverit-docgen/docker.sh for local standalone runs.
 
 services:
   docgen:
     environment:
-      - REDIS_URL=${REDIS_URL}
-      - API_BASE_URL=${API_BASE_URL:-http://api:3000/api/v1}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379}
+      - API_BASE_URL=${API_BASE_URL:-http://host.docker.internal:3000/api/v1}
       - INTERNAL_SERVICE_TOKEN=${INTERNAL_SERVICE_TOKEN:-}
-    depends_on: []

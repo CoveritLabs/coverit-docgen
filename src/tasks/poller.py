@@ -22,7 +22,7 @@ async def cron_poll_unlabeled_data(ctx: dict) -> None:
     redis = ctx["redis"]
 
     if not neo_manager.driver:
-        logger.error("Database connection unavailable; skipping poll")
+        logger.error("Neo4j connection unavailable; skipping poll")
         return
 
     queued = 0

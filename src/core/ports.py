@@ -17,7 +17,7 @@ class GraphEventConsumer(ABC):
 class ResultPublisher(ABC):
     """
     Abstract interface for publishing the final labeled results to other services.
-    Implementations could write to Postgres, emit a RabbitMQ event, or call a webhook.
+    Implementations could write to Neo4j, emit a RabbitMQ event, or call a webhook.
     """
 
     @abstractmethod

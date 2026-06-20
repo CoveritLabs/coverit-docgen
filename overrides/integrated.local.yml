@@ -1,0 +1,22 @@
+# Copyright (c) 2026 CoverIt Labs. All Rights Reserved.
+# Proprietary and confidential. Unauthorized use is strictly prohibited.
+# See LICENSE file in the project root for full license information.
+
+# Used when DocGen is included by API/frontend local Docker stacks.
+
+services:
+  docgen:
+    environment:
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379}
+      - API_BASE_URL=${API_BASE_URL:-http://api:3000/api/v1}
+      - INTERNAL_SERVICE_TOKEN=${INTERNAL_SERVICE_TOKEN:-}
+      - NEO4J_URL=${DOCGEN_NEO4J_URL:-bolt://neo4j:7687}
+      - NEO4J_USERNAME=${DOCGEN_NEO4J_USERNAME:-neo4j}
+      - NEO4J_PASSWORD=${NEO4J_PASSWORD:-password}
+    depends_on:
+      api:
+        condition: service_started
+      redis:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy

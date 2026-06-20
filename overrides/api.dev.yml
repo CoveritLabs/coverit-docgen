@@ -1,9 +1,13 @@
 # OVERRIDE: Local Development
 services:
-  worker:
+  docgen:
     image: coverit-docgen-dev-local
     build:
+      context: ${DOCGEN_DIR}
       dockerfile: Dockerfile.dev
+    environment:
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379}
+      - API_BASE_URL=${API_BASE_URL:-http://api:3000/api/v1}
     volumes:
-      - ./src:/app/src
-      - ./logs:/app/logs
+      - ${DOCGEN_DIR}/src:/app/src
+      - ${DOCGEN_DIR}/logs:/app/logs

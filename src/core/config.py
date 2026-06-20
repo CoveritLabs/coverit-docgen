@@ -7,6 +7,7 @@ class Settings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
+        extra="ignore",
     )
 
     # Constants
@@ -17,6 +18,7 @@ class Settings(BaseSettings):
     bdd_split_features: bool = False
     bdd_feature_similarity_threshold: float = 0.42
     bdd_singleton_merge_threshold: float = 0.25
+    jira_report_poll_batch_size: int = 3
 
     # Application
     app_name: str = "DocGen"
@@ -24,23 +26,17 @@ class Settings(BaseSettings):
     debug: bool = False
     environment: str = "development"
 
-    # Database
-    db_user: str = "postgres"
-    db_password: str = "postgres"
-    db_name: str = "postgres"
-
-    database_url: str = (
-        "postgresql+asyncpg://postgres:postgres@db:5432/coverit?schema=public"
-    )
-
     # External Services
     redis_url: str = "redis://redis:6379"
+    api_base_url: str = "http://localhost:3000/api/v1"
+    internal_service_token: str = ""
     neo4j_url: str = "bolt://localhost:7687"
     neo4j_password: str = "password"
     neo4j_username: str = "neo4j"
 
     poller_cron_hours: str = "0,4,8,12,16,20"
     poller_cron_minutes: str = "0"
+    jira_report_cron_minutes: str = None
 
     # CORS
     allowed_origins: list[str] = ["http://localhost:3000"]
