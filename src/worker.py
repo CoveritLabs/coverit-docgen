@@ -8,6 +8,7 @@ setup_logging(settings)
 
 import logging
 import json
+from typing import Any
 
 from arq import cron, func
 
@@ -29,6 +30,11 @@ logger = logging.getLogger("arq.worker")
 CRON_HOURS = parse_cron_string(settings.poller_cron_hours)
 CRON_MINUTES = parse_cron_string(settings.poller_cron_minutes)
 
+def arq_job_serializer(value: Any) -> bytes:
+    return json.dumps(value, separators=(",", ":"), default=str).encode("utf-8")
+
+def arq_job_deserializer(value: bytes) -> Any:
+    return json.loads(value.decode("utf-8"))
 
 async def startup(ctx: dict) -> None:
     """Initialize database clients and immediately poll for queued work."""
@@ -36,28 +42,6 @@ async def startup(ctx: dict) -> None:
     neo_manager.init()
     await playwright_manager.start()
     logger.info("Worker initialized database connections")
-
-    with open("./src/all_flows.json") as f:
-        test_flows = json.load(f)
-
-    all_flows = []
-    for to_state, flows in test_flows.items():
-        all_flows.extend(
-            [
-                {
-                    "checkpoint_hash": flow["checkpoint"],
-                    "transition_ids": flow["transition_refs"],
-                }
-                for flow in flows
-            ]
-        )
-    payload = {"session_id": "8d03dd93-1cba-4ad1-8f72-a20caf5519e8", "flows": all_flows}
-
-    await ctx["redis"].enqueue_job(
-        "task_generate_bdd",
-        payload=payload,
-    )
-    # await cron_poll_unlabeled_data(ctx)
 
 
 async def shutdown(ctx: dict) -> None:
@@ -71,8 +55,11 @@ async def shutdown(ctx: dict) -> None:
 class WorkerSettings:
     """ARQ hooks, tasks, schedule, and Redis connection settings."""
 
+    queue_name = "docgen:queue"
     on_startup = startup
     on_shutdown = shutdown
+    job_serializer = arq_job_serializer
+    job_deserializer = arq_job_deserializer
     functions = [
         task_label_state_by_id,
         task_label_transition_by_id,
