@@ -83,22 +83,44 @@ class JiraProvider(IssueProvider):
     @staticmethod
     def _adf_description(structured_description: dict) -> dict:
         """Transform the structured report description into Atlassian Document Format."""
-        blocks = structured_description["blocks"]
-        footer = structured_description["footer"]
+        blocks = structured_description.get("blocks", [])
+        footer = structured_description.get("footer")
         paragraphs = [
-            f"{block['title']}: {block['text']}" if block["type"] == "metadata" else block["text"]
+            block.get("text") or " "
             for block in blocks
+            if block.get("type") == "paragraph"
         ]
-        paragraphs.append(footer)
+        if not paragraphs:
+            paragraphs.append(structured_description.get("summary") or " ")
 
         return {
             "type": "doc",
             "version": 1,
             "content": [
+                *[JiraProvider._adf_paragraph(line) for line in paragraphs],
+                *([JiraProvider._adf_footer(footer)] if footer else []),
+            ],
+        }
+
+    @staticmethod
+    def _adf_paragraph(text: str) -> dict:
+        return {
+            "type": "paragraph",
+            "content": [{"type": "text", "text": text or " "}],
+        }
+
+    @staticmethod
+    def _adf_footer(text: str) -> dict:
+        return {
+            "type": "paragraph",
+            "content": [
                 {
-                    "type": "paragraph",
-                    "content": [{"type": "text", "text": line or " "}],
+                    "type": "text",
+                    "text": text,
+                    "marks": [
+                        {"type": "em"},
+                        {"type": "textColor", "attrs": {"color": "#626F86"}},
+                    ],
                 }
-                for line in paragraphs
             ],
         }

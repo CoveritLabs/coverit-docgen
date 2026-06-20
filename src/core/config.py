@@ -36,7 +36,7 @@ class Settings(BaseSettings):
 
     poller_cron_hours: str = "0,4,8,12,16,20"
     poller_cron_minutes: str = "0"
-    jira_report_cron_minutes: str = range(0, 60, 5)
+    jira_report_cron_minutes: str = None
 
     # CORS
     allowed_origins: list[str] = ["http://localhost:3000"]
