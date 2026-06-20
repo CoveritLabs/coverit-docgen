@@ -2,6 +2,8 @@ import re
 from urllib.parse import urlparse
 
 def parse_cron_string(cron_str: str) -> set[int]:
+    if not cron_str or cron_str.strip() == "*":
+        return None  # ARQ treats None as "every minute"
     return {int(x.strip()) for x in cron_str.split(",")}
 
 

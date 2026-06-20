@@ -74,12 +74,12 @@ class WorkerSettings:
     cron_jobs = [
         cron(
             cron_poll_unlabeled_data,
-            hour=CRON_HOURS,
-            minute=CRON_MINUTES,
+            hour=CRON_HOURS or list(range(0, 24, 1)),
+            minute=CRON_MINUTES or list(range(0, 60, 1)),
         ),
         cron(
             cron_poll_scenario_reports,
-            minute=JIRA_REPORT_CRON_MINUTES,
+            minute=JIRA_REPORT_CRON_MINUTES or list(range(0, 60, 1))
         )
     ]
     redis_settings = redis_settings
