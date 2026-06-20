@@ -160,6 +160,7 @@ async def task_generate_bdd(ctx: dict, payload: dict) -> dict:
         "assertions": {},
         "action_hooks": {},
     }
+
     if compiled.feature_name is not None and compiled.feature_text is not None:
         result_payload["feature_name"] = compiled.feature_name
         result_payload["feature_text"] = compiled.feature_text
@@ -171,22 +172,5 @@ async def task_generate_bdd(ctx: dict, payload: dict) -> dict:
         BULLMQ_JOB_NAME,
         result_payload,
     )
-
-    json_path = "./src/result.json"
-
-    with open(json_path, "w", encoding="utf-8") as f:
-        json.dump(result_payload, f, indent=4, ensure_ascii=False)
-    
-    features_dir =  "./src/features"
-    os.makedirs(features_dir, exist_ok=True)
-
-    for feature in result_payload["features"]:
-        # make filename safe
-        filename = feature["feature_name"].replace(" ", "_").lower()
-
-        feature_path = f"{features_dir}/{filename}.feature"
-
-        with open(feature_path, "w", encoding="utf-8") as f:
-            f.write(feature["feature_text"])
 
     return result_payload
