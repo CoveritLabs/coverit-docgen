@@ -79,6 +79,16 @@
   - Persistent Compose volume for logs.
 - Automated coverage for query invariants, rollback behavior, async transitions, page analysis, contextual naming, logging, and enqueue failures.
 
+## Local Worker
+- Start API, frontend, Postgres, Redis, and Neo4j from `coverit-frontend`:
+  ```sh
+  ./docker.sh up --local --app-only --no-build
+  ```
+- Copy `.env.example` to `.env`, then run DocGen locally with file watching:
+  ```sh
+  python scripts/run_local_worker.py
+  ```
+
 ## Important Design Decisions
 - Neo4j is the source of truth for graph topology and labeling lifecycle.
 - Status lifecycle is `NULL/PENDING -> QUEUED -> COMPLETED`, with failures returning only the affected item to `PENDING`.
