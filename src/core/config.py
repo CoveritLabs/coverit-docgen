@@ -18,6 +18,14 @@ class Settings(BaseSettings):
     bdd_split_features: bool = False
     bdd_feature_similarity_threshold: float = 0.42
     bdd_singleton_merge_threshold: float = 0.25
+    video_retry_delay_seconds: int = 30
+    video_max_retries: int = 5
+    video_output_dir: str = "artifacts/videos"
+    video_default_width: int = 1280
+    video_default_height: int = 720
+    video_default_fps: int = 30
+    video_action_speed: float = 0.1
+    video_random_seed: int = 42
     jira_report_poll_batch_size: int = 3
 
     # Application

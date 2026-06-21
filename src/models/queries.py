@@ -334,3 +334,33 @@ WITH state_hash,
      ] AS locators
 RETURN state_hash, locators
 """
+
+RESOLVE_VIDEO_FLOWS = """
+UNWIND $flows AS flow
+OPTIONAL MATCH (checkpoint:State {
+  session_id: $session_id,
+  state_hash: flow.checkpoint_hash
+})
+UNWIND range(0, size(flow.transition_ids) - 1) AS transition_index
+WITH flow,
+     checkpoint,
+     transition_index,
+     flow.transition_ids[transition_index] AS requested_transition_id
+OPTIONAL MATCH (from:State {session_id: $session_id})
+      -[transition:TRANSITION {
+        session_id: $session_id,
+        transition_id: requested_transition_id
+      }]->
+      (to:State {session_id: $session_id})
+RETURN flow.flow_index AS flow_index,
+       transition_index,
+       checkpoint.state_hash AS checkpoint_hash,
+       checkpoint.url AS checkpoint_url,
+       transition.transition_id AS transition_id,
+       transition.action_type AS action_type,
+       transition.locator_value AS locator_value,
+       transition.action_value AS action_value,
+       from.state_hash AS from_hash,
+       to.state_hash AS to_hash
+ORDER BY flow_index, transition_index
+"""

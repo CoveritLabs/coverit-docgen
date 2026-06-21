@@ -22,6 +22,7 @@ from src.tasks.labeling import (
 )
 from src.tasks.poller import cron_poll_unlabeled_data
 from src.tasks.bdd import task_generate_bdd
+from src.tasks.video import task_generate_video
 from src.tasks.reporter import (
     cron_poll_scenario_reports,
     task_report_scenario_to_provider,
@@ -33,6 +34,7 @@ logger = logging.getLogger("arq.worker")
 CRON_HOURS = parse_cron_string(settings.poller_cron_hours)
 CRON_MINUTES = parse_cron_string(settings.poller_cron_minutes)
 JIRA_REPORT_CRON_MINUTES = parse_cron_string(settings.jira_report_cron_minutes)
+
 
 def arq_job_serializer(value: Any) -> bytes:
     return json.dumps(value, separators=(",", ":"), default=str).encode("utf-8")
@@ -47,6 +49,22 @@ async def startup(ctx: dict) -> None:
     neo_manager.init()
     await playwright_manager.start()
     logger.info("Worker initialized external connections")
+    payload = {
+        "session_id": "a02caae1-ac52-4458-ac64-61272cbf74df",
+        "flows": [
+            {
+                "checkpoint_hash": "b4e52123b8c2da1abf6b18c23e94b4f39e4e1ed1a73f199917612c574e7772b0",
+                "transition_ids": [
+                    "4e802e0fd4d2a1fe4b74438d9e15444facf2cbd954be46106c1d19725d9f3765",
+                    "1eff2d62c4839b4d8768f7872f5075ac59badb669fd9932b7c1da0dee117e280",
+                    "6aba9a0e0f9f636fff2268bdff7af09282a5b992b374877b3821d2c07c72e7ed",
+                ],
+            }
+        ],
+    }
+    await ctx["redis"].enqueue_job(
+        "task_generate_video", payload=payload, _queue_name="docgen:queue"
+    )
 
 
 async def shutdown(ctx: dict) -> None:
@@ -69,7 +87,8 @@ class WorkerSettings:
         task_label_transition_by_id,
         task_label_graph,
         func(task_generate_bdd, max_tries=settings.bdd_max_retries),
-        func(task_report_scenario_to_provider, max_tries=1),
+        func(task_generate_video, max_tries=settings.video_max_retries),
+        # func(task_report_scenario_to_provider, max_tries=1),
     ]
     cron_jobs = [
         cron(
@@ -77,9 +96,9 @@ class WorkerSettings:
             hour=CRON_HOURS or list(range(0, 24, 1)),
             minute=CRON_MINUTES or list(range(0, 60, 1)),
         ),
-        cron(
-            cron_poll_scenario_reports,
-            minute=JIRA_REPORT_CRON_MINUTES or list(range(0, 60, 1))
-        )
+        # cron(
+        #     cron_poll_scenario_reports,
+        #     minute=JIRA_REPORT_CRON_MINUTES or list(range(0, 60, 1))
+        # )
     ]
     redis_settings = redis_settings

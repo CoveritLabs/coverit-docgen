@@ -10,4 +10,3 @@ services:
       - API_BASE_URL=${API_BASE_URL:-http://api:3000/api/v1}
     volumes:
       - ${DOCGEN_DIR}/src:/app/src
-      - ${DOCGEN_DIR}/logs:/app/logs
