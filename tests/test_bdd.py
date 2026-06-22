@@ -16,7 +16,9 @@ from src.models.bdd import (
     StepType,
 )
 from src.models.queries import (
+    CLAIM_BDD_FLOW_LABELING,
     CLAIM_BDD_SESSION_LABELING,
+    GET_BDD_FLOW_LABELING_STATUS,
     GET_BDD_LABELING_STATUS,
     GET_BDD_OUTGOING_LOCATORS,
     RESOLVE_BDD_FLOWS,
@@ -82,6 +84,15 @@ class BddQueryTests(unittest.TestCase):
         self.assertIn("labeling_status IS NULL", CLAIM_BDD_SESSION_LABELING)
         self.assertIn("labeling_claim_id = $claim_id", CLAIM_BDD_SESSION_LABELING)
         self.assertIn("labeling_status = 'QUEUED'", CLAIM_BDD_SESSION_LABELING)
+
+    def test_flow_preflight_and_claim_are_requested_flow_scoped(self):
+        self.assertIn("UNWIND $flows AS flow", GET_BDD_FLOW_LABELING_STATUS)
+        self.assertIn("flow.checkpoint_hash", GET_BDD_FLOW_LABELING_STATUS)
+        self.assertIn("flow.transition_ids", GET_BDD_FLOW_LABELING_STATUS)
+        self.assertIn("UNWIND $flows AS flow", CLAIM_BDD_FLOW_LABELING)
+        self.assertIn("flow.checkpoint_hash", CLAIM_BDD_FLOW_LABELING)
+        self.assertIn("flow.transition_ids", CLAIM_BDD_FLOW_LABELING)
+        self.assertIn("labeling_claim_id = $claim_id", CLAIM_BDD_FLOW_LABELING)
 
     def test_resolution_preserves_input_order_and_session(self):
         self.assertIn("flow.flow_index", RESOLVE_BDD_FLOWS)
@@ -655,6 +666,12 @@ class BddTaskTests(unittest.IsolatedAsyncioTestCase):
             "task_label_graph",
             "session",
         )
+        repo.claim_unlabeled.assert_awaited_once()
+        self.assertEqual(repo.claim_unlabeled.await_args.args[0], "session")
+        self.assertEqual(
+            repo.claim_unlabeled.await_args.args[2],
+            repo.get_labeling_status.await_args.args[1],
+        )
         repo.rollback_claim.assert_not_awaited()
 
     async def test_enqueue_failure_rolls_back_exact_claim(self):
@@ -770,7 +787,12 @@ class BddTaskTests(unittest.IsolatedAsyncioTestCase):
             },
         )
         enqueue.assert_awaited_once()
-        repo.get_labeling_status.assert_awaited_once_with("graph-1")
+        repo.get_labeling_status.assert_awaited_once()
+        self.assertEqual(repo.get_labeling_status.await_args.args[0], "graph-1")
+        self.assertEqual(
+            repo.get_labeling_status.await_args.args[1],
+            repo.resolve_flows.await_args.args[1],
+        )
         repo.resolve_flows.assert_awaited_once()
         self.assertEqual(repo.resolve_flows.await_args.args[0], "graph-1")
         repo.get_outgoing_locators.assert_awaited_once()
