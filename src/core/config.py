@@ -33,9 +33,12 @@ class Settings(BaseSettings):
     video_default_width: int = 1280
     video_default_height: int = 720
     video_default_fps: int = 30
-    video_action_speed: float = 0.1
+    video_action_speed: float = 1.0
     video_random_seed: int = 42
-    jira_report_poll_batch_size: int = 3
+    ffmpeg_path: str | None = None
+    scenario_report_max_retries: int = 1
+    manual_report_max_retries: int = 1
+    manual_report_timeout_seconds: int = 900
 
     # Application
     app_name: str = "DocGen"
@@ -52,9 +55,11 @@ class Settings(BaseSettings):
     neo4j_password: str = "password"
     neo4j_username: str = "neo4j"
 
+    # Poller
     poller_cron_hours: str = "0,4,8,12,16,20"
     poller_cron_minutes: str = "0"
     jira_report_cron_minutes: str = None
+    jira_report_poll_batch_size: int = 3
 
     # CORS
     allowed_origins: list[str] = ["http://localhost:3000"]

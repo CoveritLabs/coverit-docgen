@@ -28,6 +28,7 @@ from src.tasks.reporter import (
     cron_poll_scenario_reports,
     task_report_scenario_to_provider,
 )
+from src.tasks.manual_bug import task_generate_manual_bug_report
 from src.utils.helpers import parse_cron_string
 
 logger = logging.getLogger("arq.worker")
@@ -124,7 +125,12 @@ class WorkerSettings:
         func(task_generate_bdd, max_tries=settings.bdd_max_retries),
         func(task_generate_user_guide, max_tries=settings.bdd_max_retries),
         func(task_generate_video, max_tries=settings.video_max_retries),
-        func(task_report_scenario_to_provider, max_tries=1),
+        func(
+            task_generate_manual_bug_report,
+            max_tries=settings.manual_report_max_retries,
+            timeout=settings.manual_report_timeout_seconds,
+        ),
+        func(task_report_scenario_to_provider, max_tries=settings.scenario_report_max_retries),
     ]
     cron_jobs = [
         cron(

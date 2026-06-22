@@ -323,7 +323,13 @@ def _build_feature_plan(
                     keyword="And",
                 )
             )
-        scenarios.append(ScenarioPlan(name=scenario_name, steps=steps))
+        scenarios.append(
+            ScenarioPlan(
+                name=scenario_name,
+                steps=steps,
+                flow_id=flow.flow_id,
+            )
+        )
 
     return FeaturePlan(name=infer_feature_name(flows), scenarios=scenarios)
 

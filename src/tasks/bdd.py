@@ -58,18 +58,27 @@ async def task_generate_bdd(ctx: dict, payload: dict) -> dict:
     """Generate BDD artifacts after all graph records are labeled."""
     request = BddGenerationInput.model_validate(payload)
     session_id = request.session_id
+    graph_id = request.graph_id or session_id
     job_try = int(ctx.get("job_try", 1))
+    flow_ids = list(
+        dict.fromkeys(
+            [
+                *(flow_id for flow_id in request.flow_ids if flow_id),
+                *(flow.flow_id for flow in request.flows if flow.flow_id),
+            ]
+        )
+    )
 
     async with neo_manager.driver.session() as session:
         repo = BddRepository(session)
-        status = await repo.get_labeling_status(session_id)
+        status = await repo.get_labeling_status(graph_id, request.flows)
         if status["state_count"] == 0:
-            raise ValueError(f"Session {session_id} contains no states")
+            raise ValueError(f"Graph {graph_id} contains no states")
 
         invalid = status["invalid_states"] + status["invalid_transitions"]
         if invalid:
             raise ValueError(
-                f"Session {session_id} contains {invalid} invalid labeling statuses"
+                f"Graph {graph_id} contains {invalid} invalid labeling statuses"
             )
 
         pending = status["pending_states"] + status["pending_transitions"]
@@ -90,8 +99,9 @@ async def task_generate_bdd(ctx: dict, payload: dict) -> dict:
 
             if pending:
                 claim = await repo.claim_unlabeled(
-                    session_id,
+                    graph_id,
                     uuid.uuid4().hex,
+                    request.flows,
                 )
                 state_ids = claim.get("state_ids") or []
                 transition_ids = claim.get("transition_ids") or []
@@ -99,14 +109,14 @@ async def task_generate_bdd(ctx: dict, payload: dict) -> dict:
                     try:
                         job = await ctx["redis"].enqueue_job(
                             "task_label_graph",
-                            session_id,
+                            graph_id,
                         )
                         if job is None:
                             raise RuntimeError("ARQ did not enqueue the labeling job")
                     except Exception:
                         logger.error(f"Labeling session {session_id} Failed")
                         await repo.rollback_claim(
-                            session_id,
+                            graph_id,
                             state_ids,
                             transition_ids,
                         )
@@ -118,7 +128,7 @@ async def task_generate_bdd(ctx: dict, payload: dict) -> dict:
             )
             raise Retry(defer=settings.bdd_retry_delay_seconds)
 
-        flows = await repo.resolve_flows(session_id, request.flows)
+        flows = await repo.resolve_flows(graph_id, request.flows)
         state_hashes = list(
             dict.fromkeys(
                 state.state_hash
@@ -128,7 +138,7 @@ async def task_generate_bdd(ctx: dict, payload: dict) -> dict:
             )
         )
         outgoing_locators = await repo.get_outgoing_locators(
-            session_id,
+            graph_id,
             state_hashes,
         )
 
@@ -165,7 +175,14 @@ async def task_generate_bdd(ctx: dict, payload: dict) -> dict:
         "transitions": compiled.transitions,
         "assertions": compiled.assertions,
         "action_hooks": {},
+        "flow_ids": flow_ids,
     }
+
+    if request.regression_codebase_id:
+        result_payload["regression_codebase_id"] = request.regression_codebase_id
+
+    if request.codegen_config:
+        result_payload["codegen_config"] = request.codegen_config
 
     if compiled.feature_name is not None and compiled.feature_text is not None:
         result_payload["feature_name"] = compiled.feature_name

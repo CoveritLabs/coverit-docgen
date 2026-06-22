@@ -253,6 +253,64 @@ RETURN state_count,
        invalid_transitions
 """
 
+GET_BDD_FLOW_LABELING_STATUS = """
+CALL () {
+  UNWIND $flows AS flow
+  OPTIONAL MATCH (checkpoint:State {
+    session_id: $session_id,
+    state_hash: flow.checkpoint_hash
+  })
+  RETURN collect(DISTINCT checkpoint) AS checkpoint_states
+}
+CALL () {
+  UNWIND $flows AS flow
+  UNWIND flow.transition_ids AS requested_transition_id
+  OPTIONAL MATCH (from:State {session_id: $session_id})
+        -[transition:TRANSITION {
+          session_id: $session_id,
+          transition_id: requested_transition_id
+        }]->
+        (to:State {session_id: $session_id})
+  RETURN collect(DISTINCT from) AS from_states,
+         collect(DISTINCT to) AS to_states,
+         collect(DISTINCT transition) AS raw_transitions
+}
+WITH checkpoint_states + from_states + to_states AS raw_states,
+     raw_transitions
+WITH [state IN raw_states WHERE state IS NOT NULL] AS states,
+     [transition IN raw_transitions WHERE transition IS NOT NULL] AS transitions
+RETURN size(states) AS state_count,
+       size(transitions) AS transition_count,
+       size([
+         state IN states
+         WHERE state.labeling_status IS NULL
+            OR state.labeling_status = 'PENDING'
+       ]) AS pending_states,
+       size([
+         transition IN transitions
+         WHERE transition.labeling_status IS NULL
+            OR transition.labeling_status = 'PENDING'
+       ]) AS pending_transitions,
+       size([
+         state IN states
+         WHERE state.labeling_status = 'QUEUED'
+       ]) AS queued_states,
+       size([
+         transition IN transitions
+         WHERE transition.labeling_status = 'QUEUED'
+       ]) AS queued_transitions,
+       size([
+         state IN states
+         WHERE state.labeling_status IS NOT NULL
+           AND NOT state.labeling_status IN ['PENDING', 'QUEUED', 'COMPLETED']
+       ]) AS invalid_states,
+       size([
+         transition IN transitions
+         WHERE transition.labeling_status IS NOT NULL
+           AND NOT transition.labeling_status IN ['PENDING', 'QUEUED', 'COMPLETED']
+       ]) AS invalid_transitions
+"""
+
 CLAIM_BDD_SESSION_LABELING = """
 CALL () {
   MATCH (state:State {session_id: $session_id})
@@ -266,6 +324,53 @@ CALL () {
   MATCH (from:State {session_id: $session_id})
         -[transition:TRANSITION]->
         (to:State {session_id: $session_id})
+  WHERE transition.labeling_status IS NULL
+     OR transition.labeling_status = 'PENDING'
+  SET transition.labeling_status = 'QUEUED',
+      transition.labeling_claim_id = $claim_id
+  RETURN collect(elementId(transition)) AS transition_ids
+}
+RETURN state_ids, transition_ids
+"""
+
+CLAIM_BDD_FLOW_LABELING = """
+CALL () {
+  UNWIND $flows AS flow
+  OPTIONAL MATCH (checkpoint:State {
+    session_id: $session_id,
+    state_hash: flow.checkpoint_hash
+  })
+  RETURN collect(DISTINCT checkpoint) AS checkpoint_states
+}
+CALL () {
+  UNWIND $flows AS flow
+  UNWIND flow.transition_ids AS requested_transition_id
+  OPTIONAL MATCH (from:State {session_id: $session_id})
+        -[transition:TRANSITION {
+          session_id: $session_id,
+          transition_id: requested_transition_id
+        }]->
+        (to:State {session_id: $session_id})
+  RETURN collect(DISTINCT from) AS from_states,
+         collect(DISTINCT to) AS to_states,
+         collect(DISTINCT transition) AS raw_transitions
+}
+WITH checkpoint_states + from_states + to_states AS raw_states,
+     raw_transitions
+WITH [state IN raw_states WHERE state IS NOT NULL] AS states,
+     [transition IN raw_transitions WHERE transition IS NOT NULL] AS transitions
+CALL (states) {
+  UNWIND states AS state
+  WITH state
+  WHERE state.labeling_status IS NULL
+     OR state.labeling_status = 'PENDING'
+  SET state.labeling_status = 'QUEUED',
+      state.labeling_claim_id = $claim_id
+  RETURN collect(elementId(state)) AS state_ids
+}
+CALL (transitions) {
+  UNWIND transitions AS transition
+  WITH transition
   WHERE transition.labeling_status IS NULL
      OR transition.labeling_status = 'PENDING'
   SET transition.labeling_status = 'QUEUED',

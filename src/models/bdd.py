@@ -12,6 +12,7 @@ class StepType(str, Enum):
 
 
 class BddFlowInput(BaseModel):
+    flow_id: str | None = None
     checkpoint_hash: str = Field(min_length=1)
     transition_ids: list[str] = Field(min_length=1)
 
@@ -25,7 +26,11 @@ class BddFlowInput(BaseModel):
 
 class BddGenerationInput(BaseModel):
     session_id: str = Field(min_length=1)
+    graph_id: str | None = None
     flows: list[BddFlowInput] = Field(min_length=1)
+    flow_ids: list[str] = Field(default_factory=list)
+    regression_codebase_id: str | None = None
+    codegen_config: dict[str, Any] | None = None
 
 
 class ResolvedState(BaseModel):
@@ -51,6 +56,7 @@ class ResolvedTransition(BaseModel):
 
 
 class ResolvedFlow(BaseModel):
+    flow_id: str | None = None
     checkpoint: ResolvedState
     transitions: list[ResolvedTransition]
 
@@ -65,6 +71,7 @@ class StepPlan(BaseModel):
 class ScenarioPlan(BaseModel):
     name: str
     steps: list[StepPlan]
+    flow_id: str | None = None
 
 
 class FeaturePlan(BaseModel):

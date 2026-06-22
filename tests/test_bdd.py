@@ -16,7 +16,9 @@ from src.models.bdd import (
     StepType,
 )
 from src.models.queries import (
+    CLAIM_BDD_FLOW_LABELING,
     CLAIM_BDD_SESSION_LABELING,
+    GET_BDD_FLOW_LABELING_STATUS,
     GET_BDD_LABELING_STATUS,
     GET_BDD_OUTGOING_LOCATORS,
     RESOLVE_BDD_FLOWS,
@@ -82,6 +84,15 @@ class BddQueryTests(unittest.TestCase):
         self.assertIn("labeling_status IS NULL", CLAIM_BDD_SESSION_LABELING)
         self.assertIn("labeling_claim_id = $claim_id", CLAIM_BDD_SESSION_LABELING)
         self.assertIn("labeling_status = 'QUEUED'", CLAIM_BDD_SESSION_LABELING)
+
+    def test_flow_preflight_and_claim_are_requested_flow_scoped(self):
+        self.assertIn("UNWIND $flows AS flow", GET_BDD_FLOW_LABELING_STATUS)
+        self.assertIn("flow.checkpoint_hash", GET_BDD_FLOW_LABELING_STATUS)
+        self.assertIn("flow.transition_ids", GET_BDD_FLOW_LABELING_STATUS)
+        self.assertIn("UNWIND $flows AS flow", CLAIM_BDD_FLOW_LABELING)
+        self.assertIn("flow.checkpoint_hash", CLAIM_BDD_FLOW_LABELING)
+        self.assertIn("flow.transition_ids", CLAIM_BDD_FLOW_LABELING)
+        self.assertIn("labeling_claim_id = $claim_id", CLAIM_BDD_FLOW_LABELING)
 
     def test_resolution_preserves_input_order_and_session(self):
         self.assertIn("flow.flow_index", RESOLVE_BDD_FLOWS)
@@ -479,8 +490,85 @@ class BddCompilerTests(unittest.TestCase):
         self.assertIn('And after action I run hook "H_WAIT"', text)
         self.assertIn('And I assert "A_PAID"', text)
 
+    def test_renderer_adds_flow_id_comment_before_scenario(self):
+        plan = FeaturePlan(
+            name="Checkout User Flows",
+            scenarios=[
+                ScenarioPlan(
+                    name="Pay",
+                    flow_id="flow-1",
+                    steps=[
+                        StepPlan(
+                            type=StepType.ACTION_HOOK,
+                            id="H_WAIT",
+                            keyword="And",
+                        ),
+                    ],
+                )
+            ],
+        )
+
+        self.assertIn(
+            "  # Flow ID: flow-1\n  Scenario: Pay",
+            render_feature(plan),
+        )
+
 
 class BddRepositoryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_resolved_flow_preserves_input_flow_id(self):
+        result = Mock()
+        result.data = AsyncMock(
+            return_value=[
+                {
+                    "flow_index": 0,
+                    "transition_index": 0,
+                    "checkpoint_db_id": "s1",
+                    "checkpoint_hash": "start",
+                    "checkpoint_name": "Start Page",
+                    "checkpoint_description": "",
+                    "checkpoint_url": "/",
+                    "checkpoint_html": "<h1>Start</h1>",
+                    "checkpoint_status": "COMPLETED",
+                    "transition_db_id": "t1",
+                    "transition_id": "go",
+                    "transition_name": "Go",
+                    "transition_action": "Click Go",
+                    "action_type": "click",
+                    "locator_value": "#go",
+                    "transition_status": "COMPLETED",
+                    "from_db_id": "s1",
+                    "from_hash": "start",
+                    "from_name": "Start Page",
+                    "from_description": "",
+                    "from_url": "/",
+                    "from_html": "<h1>Start</h1>",
+                    "from_status": "COMPLETED",
+                    "to_db_id": "s2",
+                    "to_hash": "end",
+                    "to_name": "End Page",
+                    "to_description": "",
+                    "to_url": "/end",
+                    "to_html": "<h1>End</h1>",
+                    "to_status": "COMPLETED",
+                }
+            ]
+        )
+        session = Mock()
+        session.run = AsyncMock(return_value=result)
+
+        flows = await BddRepository(session).resolve_flows(
+            "graph-1",
+            [
+                BddFlowInput(
+                    flow_id="flow-1",
+                    checkpoint_hash="start",
+                    transition_ids=["go"],
+                )
+            ],
+        )
+
+        self.assertEqual(flows[0].flow_id, "flow-1")
+
     async def test_disconnected_flow_is_rejected(self):
         result = Mock()
         result.data = AsyncMock(
@@ -578,6 +666,12 @@ class BddTaskTests(unittest.IsolatedAsyncioTestCase):
             "task_label_graph",
             "session",
         )
+        repo.claim_unlabeled.assert_awaited_once()
+        self.assertEqual(repo.claim_unlabeled.await_args.args[0], "session")
+        self.assertEqual(
+            repo.claim_unlabeled.await_args.args[2],
+            repo.get_labeling_status.await_args.args[1],
+        )
         repo.rollback_claim.assert_not_awaited()
 
     async def test_enqueue_failure_rolls_back_exact_claim(self):
@@ -629,6 +723,7 @@ class BddTaskTests(unittest.IsolatedAsyncioTestCase):
         home = state("s1", "home", "Shopping Home Page")
         cart = state("s2", "cart", "Shopping Cart Page")
         flow = ResolvedFlow(
+            flow_id="flow-1",
             checkpoint=home,
             transitions=[
                 transition("t1", "open-cart", "Open Shopping Cart", home, cart)
@@ -660,8 +755,16 @@ class BddTaskTests(unittest.IsolatedAsyncioTestCase):
                 {"redis": redis, "job_try": 1},
                 {
                     "session_id": "session",
+                    "graph_id": "graph-1",
+                    "flow_ids": ["flow-top"],
+                    "regression_codebase_id": "codebase-1",
+                    "codegen_config": {
+                        "codegenBranch": "auto-tests",
+                        "prTargetBranch": "main",
+                    },
                     "flows": [
                         {
+                            "flow_id": "flow-1",
                             "checkpoint_hash": "home",
                             "transition_ids": ["open-cart"],
                         }
@@ -670,9 +773,33 @@ class BddTaskTests(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertEqual(len(result["features"]), 1)
+        self.assertEqual(result["session_id"], "session")
         self.assertEqual(result["feature_name"], "Shopping User Flows")
         self.assertIn("feature_text", result)
+        self.assertIn("# Flow ID: flow-1", result["feature_text"])
+        self.assertEqual(result["flow_ids"], ["flow-top", "flow-1"])
+        self.assertEqual(result["regression_codebase_id"], "codebase-1")
+        self.assertEqual(
+            result["codegen_config"],
+            {
+                "codegenBranch": "auto-tests",
+                "prTargetBranch": "main",
+            },
+        )
         enqueue.assert_awaited_once()
+        repo.get_labeling_status.assert_awaited_once()
+        self.assertEqual(repo.get_labeling_status.await_args.args[0], "graph-1")
+        self.assertEqual(
+            repo.get_labeling_status.await_args.args[1],
+            repo.resolve_flows.await_args.args[1],
+        )
+        repo.resolve_flows.assert_awaited_once()
+        self.assertEqual(repo.resolve_flows.await_args.args[0], "graph-1")
+        repo.get_outgoing_locators.assert_awaited_once()
+        self.assertEqual(repo.get_outgoing_locators.await_args.args[0], "graph-1")
+        self.assertEqual(enqueue.await_args.args[3]["session_id"], "session")
+        self.assertEqual(enqueue.await_args.args[3]["flow_ids"], ["flow-top", "flow-1"])
+        self.assertEqual(enqueue.await_args.args[3]["regression_codebase_id"], "codebase-1")
         self.assertFalse(Path("src/session.feature").exists())
 
 
