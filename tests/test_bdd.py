@@ -479,8 +479,85 @@ class BddCompilerTests(unittest.TestCase):
         self.assertIn('And after action I run hook "H_WAIT"', text)
         self.assertIn('And I assert "A_PAID"', text)
 
+    def test_renderer_adds_flow_id_comment_before_scenario(self):
+        plan = FeaturePlan(
+            name="Checkout User Flows",
+            scenarios=[
+                ScenarioPlan(
+                    name="Pay",
+                    flow_id="flow-1",
+                    steps=[
+                        StepPlan(
+                            type=StepType.ACTION_HOOK,
+                            id="H_WAIT",
+                            keyword="And",
+                        ),
+                    ],
+                )
+            ],
+        )
+
+        self.assertIn(
+            "  # Flow ID: flow-1\n  Scenario: Pay",
+            render_feature(plan),
+        )
+
 
 class BddRepositoryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_resolved_flow_preserves_input_flow_id(self):
+        result = Mock()
+        result.data = AsyncMock(
+            return_value=[
+                {
+                    "flow_index": 0,
+                    "transition_index": 0,
+                    "checkpoint_db_id": "s1",
+                    "checkpoint_hash": "start",
+                    "checkpoint_name": "Start Page",
+                    "checkpoint_description": "",
+                    "checkpoint_url": "/",
+                    "checkpoint_html": "<h1>Start</h1>",
+                    "checkpoint_status": "COMPLETED",
+                    "transition_db_id": "t1",
+                    "transition_id": "go",
+                    "transition_name": "Go",
+                    "transition_action": "Click Go",
+                    "action_type": "click",
+                    "locator_value": "#go",
+                    "transition_status": "COMPLETED",
+                    "from_db_id": "s1",
+                    "from_hash": "start",
+                    "from_name": "Start Page",
+                    "from_description": "",
+                    "from_url": "/",
+                    "from_html": "<h1>Start</h1>",
+                    "from_status": "COMPLETED",
+                    "to_db_id": "s2",
+                    "to_hash": "end",
+                    "to_name": "End Page",
+                    "to_description": "",
+                    "to_url": "/end",
+                    "to_html": "<h1>End</h1>",
+                    "to_status": "COMPLETED",
+                }
+            ]
+        )
+        session = Mock()
+        session.run = AsyncMock(return_value=result)
+
+        flows = await BddRepository(session).resolve_flows(
+            "graph-1",
+            [
+                BddFlowInput(
+                    flow_id="flow-1",
+                    checkpoint_hash="start",
+                    transition_ids=["go"],
+                )
+            ],
+        )
+
+        self.assertEqual(flows[0].flow_id, "flow-1")
+
     async def test_disconnected_flow_is_rejected(self):
         result = Mock()
         result.data = AsyncMock(
@@ -629,6 +706,7 @@ class BddTaskTests(unittest.IsolatedAsyncioTestCase):
         home = state("s1", "home", "Shopping Home Page")
         cart = state("s2", "cart", "Shopping Cart Page")
         flow = ResolvedFlow(
+            flow_id="flow-1",
             checkpoint=home,
             transitions=[
                 transition("t1", "open-cart", "Open Shopping Cart", home, cart)
@@ -660,8 +738,16 @@ class BddTaskTests(unittest.IsolatedAsyncioTestCase):
                 {"redis": redis, "job_try": 1},
                 {
                     "session_id": "session",
+                    "graph_id": "graph-1",
+                    "flow_ids": ["flow-top"],
+                    "regression_codebase_id": "codebase-1",
+                    "codegen_config": {
+                        "codegenBranch": "auto-tests",
+                        "prTargetBranch": "main",
+                    },
                     "flows": [
                         {
+                            "flow_id": "flow-1",
                             "checkpoint_hash": "home",
                             "transition_ids": ["open-cart"],
                         }
@@ -670,9 +756,28 @@ class BddTaskTests(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertEqual(len(result["features"]), 1)
+        self.assertEqual(result["session_id"], "session")
         self.assertEqual(result["feature_name"], "Shopping User Flows")
         self.assertIn("feature_text", result)
+        self.assertIn("# Flow ID: flow-1", result["feature_text"])
+        self.assertEqual(result["flow_ids"], ["flow-top", "flow-1"])
+        self.assertEqual(result["regression_codebase_id"], "codebase-1")
+        self.assertEqual(
+            result["codegen_config"],
+            {
+                "codegenBranch": "auto-tests",
+                "prTargetBranch": "main",
+            },
+        )
         enqueue.assert_awaited_once()
+        repo.get_labeling_status.assert_awaited_once_with("graph-1")
+        repo.resolve_flows.assert_awaited_once()
+        self.assertEqual(repo.resolve_flows.await_args.args[0], "graph-1")
+        repo.get_outgoing_locators.assert_awaited_once()
+        self.assertEqual(repo.get_outgoing_locators.await_args.args[0], "graph-1")
+        self.assertEqual(enqueue.await_args.args[3]["session_id"], "session")
+        self.assertEqual(enqueue.await_args.args[3]["flow_ids"], ["flow-top", "flow-1"])
+        self.assertEqual(enqueue.await_args.args[3]["regression_codebase_id"], "codebase-1")
         self.assertFalse(Path("src/session.feature").exists())
 
 
