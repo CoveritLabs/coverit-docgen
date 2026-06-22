@@ -7,7 +7,9 @@ from src.models.bdd import (
     ResolvedTransition,
 )
 from src.models.queries import (
+    CLAIM_BDD_FLOW_LABELING,
     CLAIM_BDD_SESSION_LABELING,
+    GET_BDD_FLOW_LABELING_STATUS,
     GET_BDD_LABELING_STATUS,
     GET_BDD_OUTGOING_LOCATORS,
     RESOLVE_BDD_FLOWS,
@@ -21,22 +23,46 @@ class BddRepository:
     def __init__(self, session: AsyncSession):
         self.session = session
 
-    async def get_labeling_status(self, session_id: str) -> dict:
-        result = await self.session.run(
-            GET_BDD_LABELING_STATUS,
-            session_id=session_id,
-        )
+    async def get_labeling_status(
+        self,
+        session_id: str,
+        flows: list[BddFlowInput] | None = None,
+    ) -> dict:
+        if flows is None:
+            result = await self.session.run(
+                GET_BDD_LABELING_STATUS,
+                session_id=session_id,
+            )
+        else:
+            result = await self.session.run(
+                GET_BDD_FLOW_LABELING_STATUS,
+                session_id=session_id,
+                flows=self._query_flows(flows),
+            )
         record = await result.single()
         if record is None:
             raise ValueError(f"Session {session_id} was not found")
         return dict(record)
 
-    async def claim_unlabeled(self, session_id: str, claim_id: str) -> dict:
-        result = await self.session.run(
-            CLAIM_BDD_SESSION_LABELING,
-            session_id=session_id,
-            claim_id=claim_id,
-        )
+    async def claim_unlabeled(
+        self,
+        session_id: str,
+        claim_id: str,
+        flows: list[BddFlowInput] | None = None,
+    ) -> dict:
+        if flows is None:
+            result = await self.session.run(
+                CLAIM_BDD_SESSION_LABELING,
+                session_id=session_id,
+                claim_id=claim_id,
+            )
+        else:
+            result = await self.session.run(
+                CLAIM_BDD_FLOW_LABELING,
+                session_id=session_id,
+                claim_id=claim_id,
+                flows=self._query_flows(flows),
+            )
         record = await result.single()
         return (
             dict(record)
@@ -66,18 +92,10 @@ class BddRepository:
         session_id: str,
         flows: list[BddFlowInput],
     ) -> list[ResolvedFlow]:
-        query_flows = [
-            {
-                "flow_index": index,
-                "checkpoint_hash": flow.checkpoint_hash,
-                "transition_ids": flow.transition_ids,
-            }
-            for index, flow in enumerate(flows)
-        ]
         result = await self.session.run(
             RESOLVE_BDD_FLOWS,
             session_id=session_id,
-            flows=query_flows,
+            flows=self._query_flows(flows),
         )
         records = await result.data()
         by_flow: dict[int, list[dict]] = {}
@@ -158,6 +176,17 @@ class BddRepository:
         )
         records = await result.data()
         return {record["state_hash"]: record["locators"] or [] for record in records}
+
+    @staticmethod
+    def _query_flows(flows: list[BddFlowInput]) -> list[dict]:
+        return [
+            {
+                "flow_index": index,
+                "checkpoint_hash": flow.checkpoint_hash,
+                "transition_ids": flow.transition_ids,
+            }
+            for index, flow in enumerate(flows)
+        ]
 
     @staticmethod
     def _state_from_row(row: dict, prefix: str) -> ResolvedState:

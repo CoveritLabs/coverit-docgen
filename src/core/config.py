@@ -33,7 +33,7 @@ class Settings(BaseSettings):
     video_default_width: int = 1280
     video_default_height: int = 720
     video_default_fps: int = 30
-    video_action_speed: float = 0.1
+    video_action_speed: float = 1.0
     video_random_seed: int = 42
     ffmpeg_path: str | None = None
     scenario_report_max_retries: int = 1

@@ -71,7 +71,7 @@ async def task_generate_bdd(ctx: dict, payload: dict) -> dict:
 
     async with neo_manager.driver.session() as session:
         repo = BddRepository(session)
-        status = await repo.get_labeling_status(graph_id)
+        status = await repo.get_labeling_status(graph_id, request.flows)
         if status["state_count"] == 0:
             raise ValueError(f"Graph {graph_id} contains no states")
 
@@ -101,6 +101,7 @@ async def task_generate_bdd(ctx: dict, payload: dict) -> dict:
                 claim = await repo.claim_unlabeled(
                     graph_id,
                     uuid.uuid4().hex,
+                    request.flows,
                 )
                 state_ids = claim.get("state_ids") or []
                 transition_ids = claim.get("transition_ids") or []
