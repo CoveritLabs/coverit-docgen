@@ -5,6 +5,7 @@ from src.models.video import (
     VideoGenerationResult,
     VideoResolvedFlow,
 )
+from src.core.config import get_settings
 from src.services.video.config import VideoRenderConfig
 from src.services.video.encoder import FfmpegEncoder
 from src.services.video.renderer import BrowserFrameRenderer
@@ -37,7 +38,7 @@ class VideoGenerator:
                 frame_dir,
             )
 
-            FfmpegEncoder().encode(
+            FfmpegEncoder(ffmpeg_path=get_settings().ffmpeg_path).encode(
                 render_output.frame_paths,
                 self.config.fps,
                 artifact_path

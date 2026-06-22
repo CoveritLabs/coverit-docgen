@@ -5,7 +5,7 @@ from pathlib import Path
 
 class FfmpegEncoder:
     def __init__(self, ffmpeg_path: str | None = None):
-        self.ffmpeg_path = ffmpeg_path or shutil.which("ffmpeg")
+        self.ffmpeg_path = resolve_ffmpeg_path(ffmpeg_path)
 
     def encode(
         self,
@@ -16,7 +16,11 @@ class FfmpegEncoder:
         if not frame_paths:
             raise ValueError("No frames were produced for video encoding")
         if not self.ffmpeg_path:
-            raise RuntimeError("ffmpeg is required to encode video output")
+            raise RuntimeError(
+                "ffmpeg is required to encode video output. Install ffmpeg, set "
+                "FFMPEG_PATH to the ffmpeg executable, or install the "
+                "imageio-ffmpeg Python package."
+            )
 
         output_path.parent.mkdir(parents=True, exist_ok=True)
         frame_pattern = str(frame_paths[0].parent / "frame_%05d.png")
@@ -66,3 +70,16 @@ class FfmpegEncoder:
         result = subprocess.run(command, capture_output=True, text=True, check=False)
         if result.returncode != 0:
             raise RuntimeError(f"ffmpeg failed: {result.stderr.strip()}")
+
+
+def resolve_ffmpeg_path(ffmpeg_path: str | None = None) -> str | None:
+    configured = ffmpeg_path or shutil.which("ffmpeg")
+    if configured:
+        return str(Path(configured).expanduser())
+
+    try:
+        import imageio_ffmpeg
+    except ImportError:
+        return None
+
+    return imageio_ffmpeg.get_ffmpeg_exe()
