@@ -139,6 +139,7 @@ class BddRepository:
 
             resolved.append(
                 ResolvedFlow(
+                    flow_id=requested.flow_id,
                     checkpoint=checkpoint,
                     transitions=transitions,
                 )

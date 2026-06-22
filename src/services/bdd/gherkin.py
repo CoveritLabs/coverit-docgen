@@ -41,7 +41,10 @@ def render_feature(
     lines = [f"Feature: {plan.name}"]
 
     for scenario in plan.scenarios:
-        lines.extend(["", f"  Scenario: {scenario.name}"])
+        lines.append("")
+        if scenario.flow_id:
+            lines.append(f"  # Flow ID: {scenario.flow_id}")
+        lines.append(f"  Scenario: {scenario.name}")
         for step in scenario.steps:
             renderer = step_renderers.get(step.type)
             if renderer is None:
