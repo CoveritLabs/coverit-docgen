@@ -9,6 +9,7 @@ from src.models.bdd import (
     ResolvedState,
     ResolvedTransition,
     ScenarioPlan,
+    SemanticAssertion,
     StepPlan,
     StepType,
 )
@@ -140,6 +141,10 @@ def _scenario_names(flows: list[ResolvedFlow]) -> list[str]:
         seen[base_name] += 1
         names.append(f"{base_name} Scenario {seen[base_name]}")
     return names
+
+
+def scenario_names_for_flows(flows: list[ResolvedFlow]) -> list[str]:
+    return _scenario_names(flows)
 
 
 def _scenario_profile(flow: ResolvedFlow, scenario_name: str) -> set[str]:
@@ -278,6 +283,8 @@ def _build_feature_plan(
     flows: list[ResolvedFlow],
     state_ids: dict[str, str],
     transition_ids: dict[str, str],
+    flow_to_index: dict[int, int],
+    semantic_assertions_by_flow_index: dict[int, list[SemanticAssertion]],
 ) -> FeaturePlan:
     scenarios: list[ScenarioPlan] = []
     for flow, scenario_name in zip(flows, _scenario_names(flows)):
@@ -305,6 +312,17 @@ def _build_feature_plan(
                 metadata={"tense": "expected"},
             )
         )
+        for assertion in semantic_assertions_by_flow_index.get(
+            flow_to_index[id(flow)],
+            [],
+        ):
+            steps.append(
+                StepPlan(
+                    type=StepType.ASSERTION,
+                    id=assertion.id,
+                    keyword="And",
+                )
+            )
         scenarios.append(ScenarioPlan(name=scenario_name, steps=steps))
 
     return FeaturePlan(name=infer_feature_name(flows), scenarios=scenarios)
@@ -313,6 +331,7 @@ def _build_feature_plan(
 def compile_bdd(
     flows: list[ResolvedFlow],
     outgoing_locators: dict[str, list[str]],
+    semantic_assertions_by_flow_index: dict[int, list[SemanticAssertion]] | None = None,
     split_features: bool = False,
     feature_similarity_threshold: float = 0.42,
     singleton_merge_threshold: float = 0.25,
@@ -324,6 +343,8 @@ def compile_bdd(
     states, transitions = _unique_entities(flows)
     state_ids = _assign_ids(states, "S")
     transition_ids = _assign_ids(transitions, "T")
+    flow_to_index = {id(flow): index for index, flow in enumerate(flows)}
+    semantic_assertions_by_flow_index = semantic_assertions_by_flow_index or {}
     flow_groups = _feature_groups(
         flows,
         split_features,
@@ -331,7 +352,14 @@ def compile_bdd(
         singleton_merge_threshold,
     )
     plans = [
-        _build_feature_plan(group, state_ids, transition_ids) for group in flow_groups
+        _build_feature_plan(
+            group,
+            state_ids,
+            transition_ids,
+            flow_to_index,
+            semantic_assertions_by_flow_index,
+        )
+        for group in flow_groups
     ]
     feature_names = _unique_feature_names([plan.name for plan in plans])
     features = [
@@ -388,10 +416,56 @@ def compile_bdd(
             },
         }
 
+    assertion_mappings = _assertion_mappings(
+        semantic_assertions_by_flow_index,
+        state_ids,
+    )
+
     return CompiledBdd(
         features=features,
         states=state_mappings,
         transitions=transition_mappings,
+        assertions=assertion_mappings,
         feature_name=features[0].feature_name if not split_features else None,
         feature_text=features[0].feature_text if not split_features else None,
     )
+
+
+def _assertion_mappings(
+    semantic_assertions_by_flow_index: dict[int, list[SemanticAssertion]],
+    state_ids: dict[str, str],
+) -> dict[str, dict]:
+    mappings: dict[str, dict] = {}
+    for assertions in semantic_assertions_by_flow_index.values():
+        for assertion in assertions:
+            assertion_id = assertion.id
+            mappings[assertion_id] = {
+                "id": assertion_id,
+                "dbId": assertion.db_id,
+                "type": StepType.ASSERTION.value,
+                "label": assertion.label,
+                "description": assertion.description,
+                "targetId": state_ids.get(
+                    assertion.target_state_db_id,
+                    assertion.target_state_db_id,
+                ),
+                "contextId": assertion.context_id,
+                "severity": assertion.severity,
+                "definition": _translate_assertion_definition(
+                    assertion.definition,
+                    state_ids,
+                ),
+                "semantic": assertion.semantic,
+            }
+    return mappings
+
+
+def _translate_assertion_definition(
+    definition: dict,
+    state_ids: dict[str, str],
+) -> dict:
+    translated = dict(definition)
+    state_id = translated.get("stateId")
+    if state_id in state_ids:
+        translated["stateId"] = state_ids[state_id]
+    return translated

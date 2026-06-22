@@ -11,6 +11,7 @@ from src.models.bdd import (
     ResolvedState,
     ResolvedTransition,
     ScenarioPlan,
+    SemanticAssertion,
     StepPlan,
     StepType,
 )
@@ -86,6 +87,9 @@ class BddQueryTests(unittest.TestCase):
         self.assertIn("flow.flow_index", RESOLVE_BDD_FLOWS)
         self.assertIn("transition_index", RESOLVE_BDD_FLOWS)
         self.assertIn("ORDER BY flow_index, transition_index", RESOLVE_BDD_FLOWS)
+        self.assertIn("checkpoint.html AS checkpoint_html", RESOLVE_BDD_FLOWS)
+        self.assertIn("from.html AS from_html", RESOLVE_BDD_FLOWS)
+        self.assertIn("to.html AS to_html", RESOLVE_BDD_FLOWS)
         self.assertGreaterEqual(
             RESOLVE_BDD_FLOWS.count("session_id: $session_id"),
             4,
@@ -130,6 +134,52 @@ class BddCompilerTests(unittest.TestCase):
             compiled.transitions["T_OPEN_SHOPPING_CART"]["action"]["stateId"],
             "S_SHOPPING_HOME_PAGE",
         )
+        self.assertEqual(compiled.assertions, {})
+
+    def test_compiles_scenario_level_semantic_assertion(self):
+        home = state("s1", "home", "Product Page")
+        cart = state("s2", "cart", "Cart Page")
+        add_to_cart = transition("t1", "add-cart", "Add Product To Cart", home, cart)
+        assertion = SemanticAssertion(
+            id="A_SCENARIO_CART_CONTAINS_ADDED_PRODUCT",
+            db_id="semantic:scenario:0:A_SCENARIO_CART_CONTAINS_ADDED_PRODUCT",
+            label="Cart contains the added product",
+            description="Validates the complete add-to-cart scenario outcome.",
+            target_state_db_id="s2",
+            context_id="scenario:0",
+            definition={
+                "type": "element",
+                "assertion": "text",
+                "stateId": "s2",
+                "locatorKey": ".cart-items",
+                "expectedText": "Product name",
+            },
+            semantic={
+                "scope": "scenario",
+                "source": "model",
+                "confidence": 0.82,
+            },
+        )
+
+        compiled = compile_bdd(
+            [ResolvedFlow(checkpoint=home, transitions=[add_to_cart])],
+            {"cart": [".cart-items"]},
+            semantic_assertions_by_flow_index={0: [assertion]},
+        )
+
+        self.assertIn(
+            'And I assert "A_SCENARIO_CART_CONTAINS_ADDED_PRODUCT"',
+            compiled.feature_text,
+        )
+        assertion_mapping = compiled.assertions[
+            "A_SCENARIO_CART_CONTAINS_ADDED_PRODUCT"
+        ]
+        self.assertEqual(assertion_mapping["targetId"], "S_CART_PAGE")
+        self.assertEqual(
+            assertion_mapping["definition"]["stateId"],
+            "S_CART_PAGE",
+        )
+        self.assertEqual(assertion_mapping["semantic"]["scope"], "scenario")
 
     def test_split_enabled_groups_same_destination_area(self):
         home = state("s1", "home", "Shop Home Page")
@@ -443,6 +493,7 @@ class BddRepositoryTests(unittest.IsolatedAsyncioTestCase):
                     "checkpoint_name": "Start Page",
                     "checkpoint_description": "",
                     "checkpoint_url": "/",
+                    "checkpoint_html": "<h1>Start</h1>",
                     "checkpoint_status": "COMPLETED",
                     "transition_db_id": "t1",
                     "transition_id": "go",
@@ -456,12 +507,14 @@ class BddRepositoryTests(unittest.IsolatedAsyncioTestCase):
                     "from_name": "Wrong Page",
                     "from_description": "",
                     "from_url": "/wrong",
+                    "from_html": "<h1>Wrong</h1>",
                     "from_status": "COMPLETED",
                     "to_db_id": "s2",
                     "to_hash": "end",
                     "to_name": "End Page",
                     "to_description": "",
                     "to_url": "/end",
+                    "to_html": "<h1>End</h1>",
                     "to_status": "COMPLETED",
                 }
             ]

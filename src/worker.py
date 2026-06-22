@@ -22,6 +22,7 @@ from src.tasks.labeling import (
 )
 from src.tasks.poller import cron_poll_unlabeled_data
 from src.tasks.bdd import task_generate_bdd
+from src.tasks.guides import task_generate_user_guide
 from src.tasks.video import task_generate_video
 from src.tasks.reporter import (
     cron_poll_scenario_reports,
@@ -62,9 +63,43 @@ async def startup(ctx: dict) -> None:
             }
         ],
     }
-    await ctx["redis"].enqueue_job(
-        "task_generate_video", payload=payload, _queue_name="docgen:queue"
-    )
+    guides_payload = {
+        "session_id": "4815ce8f-8233-4786-9f43-dee9f48b1af9",
+        "start_state_hash": "2080d89bad002cd649be78af6e80ab6c479bb820c523084828f28a4fec2ebf50",
+        "end_state_hash": "65e803f3a41d4af684c2b2f708d649609c6dd061496e5206872a0f6f6ec5f6a9",
+    }
+    bdd_payload = {
+        "session_id": "a02caae1-ac52-4458-ac64-61272cbf74df",
+        "flows": [
+            {
+                "checkpoint_hash": "b4e52123b8c2da1abf6b18c23e94b4f39e4e1ed1a73f199917612c574e7772b0",
+                "transition_ids": [
+                    "4e802e0fd4d2a1fe4b74438d9e15444facf2cbd954be46106c1d19725d9f3765"
+                ],
+            },
+            {
+                "checkpoint_hash": "2080d89bad002cd649be78af6e80ab6c479bb820c523084828f28a4fec2ebf50",
+                "transition_ids": [
+                    "1eff2d62c4839b4d8768f7872f5075ac59badb669fd9932b7c1da0dee117e280",
+                ],
+            },
+            {
+                "checkpoint_hash": "08ab3ecd8d43afcae359f084ee19bc676b5a1d62e3778017f475bd4e9269602a",
+                "transition_ids": [
+                    "6aba9a0e0f9f636fff2268bdff7af09282a5b992b374877b3821d2c07c72e7ed",
+                ],
+            },
+        ],
+    }
+    # await ctx["redis"].enqueue_job(
+    #     "task_generate_video", payload=payload, _queue_name="docgen:queue"
+    # )
+    # await ctx["redis"].enqueue_job(
+    #     "task_generate_user_guide", payload=guides_payload, _queue_name="docgen:queue"
+    # )
+    # await ctx["redis"].enqueue_job(
+    #     "task_generate_bdd", payload=bdd_payload, _queue_name="docgen:queue"
+    # )
 
 
 async def shutdown(ctx: dict) -> None:
@@ -87,8 +122,9 @@ class WorkerSettings:
         task_label_transition_by_id,
         task_label_graph,
         func(task_generate_bdd, max_tries=settings.bdd_max_retries),
+        func(task_generate_user_guide, max_tries=settings.bdd_max_retries),
         func(task_generate_video, max_tries=settings.video_max_retries),
-        # func(task_report_scenario_to_provider, max_tries=1),
+        func(task_report_scenario_to_provider, max_tries=1),
     ]
     cron_jobs = [
         cron(
@@ -96,9 +132,9 @@ class WorkerSettings:
             hour=CRON_HOURS or list(range(0, 24, 1)),
             minute=CRON_MINUTES or list(range(0, 60, 1)),
         ),
-        # cron(
-        #     cron_poll_scenario_reports,
-        #     minute=JIRA_REPORT_CRON_MINUTES or list(range(0, 60, 1))
-        # )
+        cron(
+            cron_poll_scenario_reports,
+            minute=JIRA_REPORT_CRON_MINUTES or list(range(0, 60, 1))
+        )
     ]
     redis_settings = redis_settings

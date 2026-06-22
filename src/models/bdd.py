@@ -34,6 +34,7 @@ class ResolvedState(BaseModel):
     name: str
     description: str = ""
     url: str = ""
+    html: str = ""
     labeling_status: str
 
 
@@ -71,6 +72,18 @@ class FeaturePlan(BaseModel):
     scenarios: list[ScenarioPlan]
 
 
+class SemanticAssertion(BaseModel):
+    id: str
+    db_id: str
+    label: str
+    description: str = ""
+    target_state_db_id: str
+    context_id: str
+    severity: str = "blocking"
+    definition: dict[str, Any]
+    semantic: dict[str, Any] = Field(default_factory=dict)
+
+
 @dataclass(frozen=True)
 class CompiledFeature:
     id: str
@@ -84,5 +97,6 @@ class CompiledBdd:
     features: list[CompiledFeature]
     states: dict[str, dict]
     transitions: dict[str, dict]
+    assertions: dict[str, dict]
     feature_name: str | None = None
     feature_text: str | None = None
