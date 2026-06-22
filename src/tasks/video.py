@@ -27,7 +27,6 @@ async def task_generate_video(ctx: dict, payload: dict) -> dict:
         )
 
     output_dir = Path(settings.video_output_dir)
-    print(settings)
     result = await VideoGenerator(get_video_render_config()).generate(
         request.session_id,
         flows,

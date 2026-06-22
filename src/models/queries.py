@@ -364,3 +364,65 @@ RETURN flow.flow_index AS flow_index,
        to.state_hash AS to_hash
 ORDER BY flow_index, transition_index
 """
+
+RESOLVE_SHORTEST_GUIDE_PATH = """
+OPTIONAL MATCH (start:State {
+  session_id: $session_id,
+  state_hash: $start_state_hash
+})
+OPTIONAL MATCH (target:State {
+  session_id: $session_id,
+  state_hash: $end_state_hash
+})
+CALL (start, target) {
+  WITH start, target
+  WITH start, target
+  WHERE start IS NULL OR target IS NULL
+  RETURN null AS path
+  UNION
+  WITH start, target
+  WITH start, target
+  WHERE start IS NOT NULL AND target IS NOT NULL
+  OPTIONAL MATCH path = shortestPath((start)-[:TRANSITION*0..]->(target))
+  WHERE all(state IN nodes(path) WHERE state.session_id = $session_id)
+    AND all(transition IN relationships(path)
+            WHERE transition.session_id = $session_id)
+  RETURN path
+  LIMIT 1
+}
+RETURN elementId(start) AS start_db_id,
+       start.state_hash AS start_hash,
+       start.name AS start_name,
+       start.description AS start_description,
+       start.url AS start_url,
+       start.labeling_status AS start_status,
+       elementId(target) AS end_db_id,
+       target.state_hash AS end_hash,
+       target.name AS end_name,
+       target.description AS end_description,
+       target.url AS end_url,
+       target.labeling_status AS end_status,
+       CASE WHEN path IS NULL THEN [] ELSE [
+         state IN nodes(path) |
+         {
+           db_id: elementId(state),
+           state_hash: state.state_hash,
+           name: state.name,
+           description: state.description,
+           url: state.url,
+           labeling_status: state.labeling_status
+         }
+       ] END AS states,
+       CASE WHEN path IS NULL THEN [] ELSE [
+         transition IN relationships(path) |
+         {
+           db_id: elementId(transition),
+           transition_id: transition.transition_id,
+           name: transition.name,
+           action: transition.action,
+           action_type: transition.action_type,
+           locator_value: transition.locator_value,
+           labeling_status: transition.labeling_status
+         }
+       ] END AS transitions
+"""

@@ -35,7 +35,7 @@ class VideoRenderConfig:
     phase_zoom_out: float = 0.65
     phase_rest_outro: float = 0.20
     # Click "press" feedback (a quick scale-down of the cursor).
-    click_press_frames: int = 3
+    click_press_frames: int = 5
     # Soft dim applied to the area outside the focus ring while zoomed
     # in.  Keeps the original "spotlight" cue without overpowering the
     # new windowed look.

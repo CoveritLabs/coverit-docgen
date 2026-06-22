@@ -6,7 +6,6 @@ from src.models.video import (
     VideoResolvedFlow,
 )
 from src.services.video.config import VideoRenderConfig
-from src.services.video.cursor import ASSET_DIR
 from src.services.video.encoder import FfmpegEncoder
 from src.services.video.renderer import BrowserFrameRenderer
 from src.services.video.timeline import build_timelines
@@ -32,8 +31,7 @@ class VideoGenerator:
         artifact_path = output_dir / f"{session_id}-video.mp4"
 
         with tempfile.TemporaryDirectory(prefix="coverit-video-") as temp:
-            temp_dir = Path(temp)
-            frame_dir = temp_dir / "frames"
+            frame_dir = Path(temp) / "frames"
             render_output = await BrowserFrameRenderer(self.config).render(
                 timelines,
                 frame_dir,
