@@ -23,6 +23,14 @@ services:
       - CONTEXT_DISTANCE_THRESHOLD=${CONTEXT_DISTANCE_THRESHOLD:-0.40}
       - BDD_RETRY_DELAY_SECONDS=${BDD_RETRY_DELAY_SECONDS:-30}
       - BDD_MAX_RETRIES=${BDD_MAX_RETRIES:-5}
+      - VIDEO_RETRY_DELAY_SECONDS=${VIDEO_RETRY_DELAY_SECONDS:-30}
+      - VIDEO_MAX_RETRIES=${VIDEO_MAX_RETRIES:-5}
+      - VIDEO_OUTPUT_DIR=${VIDEO_OUTPUT_DIR:-artifacts/videos}
+      - VIDEO_DEFAULT_WIDTH=${VIDEO_DEFAULT_WIDTH:-1280}
+      - VIDEO_DEFAULT_HEIGHT=${VIDEO_DEFAULT_HEIGHT:-720}
+      - VIDEO_DEFAULT_FPS=${VIDEO_DEFAULT_FPS:-30}
+      - VIDEO_ACTION_SPEED=${VIDEO_ACTION_SPEED:-1.0}
+      - VIDEO_RANDOM_SEED=${VIDEO_RANDOM_SEED:-42}
 
       # External Services
       - NEO4J_URL=${NEO4J_URL:-bolt://neo4j:7687}
@@ -41,7 +49,5 @@ services:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped
     volumes:
-      - docgen_logs:/app/logs
-
-volumes:
-  docgen_logs:
+      - ${DOCGEN_LOGS_DIR:-${DOCGEN_DIR}/logs}:/app/logs
+      - ${DOCGEN_ARTIFACTS_DIR:-${DOCGEN_DIR}/artifacts}:/app/artifacts

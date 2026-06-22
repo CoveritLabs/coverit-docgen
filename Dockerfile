@@ -4,7 +4,7 @@ FROM python:3.12-slim AS builder
 WORKDIR /app
 
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends gcc && \
+    apt-get install -y --no-install-recommends gcc ffmpeg && \
     rm -rf /var/lib/apt/lists/*
 
 RUN pip install --no-cache-dir uv
@@ -24,6 +24,10 @@ ENV PATH="/app/.venv/bin:$PATH"
 ENV ENVIRONMENT=production
 ENV PYTHONUNBUFFERED=1
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends ffmpeg && \
+    rm -rf /var/lib/apt/lists/*
 
 RUN playwright install --with-deps chromium && \
     mkdir -p /app/logs && \

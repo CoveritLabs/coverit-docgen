@@ -25,7 +25,7 @@
 - `src/models/queries.py`: centralized Cypher statements.
 - `src/services/labeling/`: page analysis, element naming, action descriptions, and Playwright-based transition labeling.
 - `src/core/`: settings, logging, Neo4j, Redis, and Playwright lifecycle management.
-- `src/services/bdd`, `guides`, and `video` currently contain placeholders and no implemented business logic.
+- `src/services/video`: live-URL MP4 walkthrough generation using Playwright screenshots, composited cursor/zoom effects, optional audio, and ffmpeg encoding.
 
 ## Existing Data Models
 - Neo4j `State` node:
@@ -131,3 +131,71 @@
 - Preserve ARQ task names registered in `WorkerSettings`.
 - Preserve early logging initialization, Neo4j warning-level filtering, rotating file logging, and `/app/logs` persistence.
 - Production images must include Playwright Chromium and run as the non-root `docgen` user.
+
+## Video Generation Task
+
+`task_generate_video` creates an MP4 product walkthrough from the same flow input shape used by BDD:
+
+```json
+{
+  "session_id": "session-id",
+  "flows": [
+    {
+      "checkpoint_hash": "start-state-hash",
+      "transition_ids": ["transition-1"]
+    }
+  ]
+}
+```
+
+The task waits for labeling completion just like BDD, opens the checkpoint/start URL in Playwright, performs the recorded actions on the live page, and renders a reference-style walkthrough: the app appears as a smaller floating window with shadow on a neutral background, with smooth zoom, cursor movement, typing, and UI sounds.
+
+```json
+{
+  "status": "success",
+  "session_id": "session-id",
+  "artifact_path": "artifacts/videos/session-id-video.mp4",
+  "duration_seconds": 4.2,
+  "resolution": "1280x720",
+  "fps": 30,
+  "flow_count": 1
+}
+```
+
+By default, Docker mounts container output from `/app/artifacts` to the host project folder `artifacts/`, so generated videos are visible at `artifacts/videos/<session-id>-video.mp4`. Set `DOCGEN_ARTIFACTS_DIR` to mount a different host directory.
+
+Runtime requirements:
+- Playwright Chromium for live-page rendering. The checkpoint URL must be reachable from inside the DocGen container.
+- Pillow for frame compositing.
+- `ffmpeg` for MP4/H.264 encoding and optional audio muxing.
+
+Rendering notes:
+- The renderer does not use a spotlight/dim mask around target elements.
+- The click pulse animation is intentionally omitted.
+- Higher `VIDEO_ACTION_SPEED` values make transitions faster; lower values make them slower.
+- Audio uses click and keypress sounds only, then normalizes the WAV mix before ffmpeg muxes it into the MP4.
+
+Environment defaults:
+- `VIDEO_MAX_RETRIES`
+- `VIDEO_RETRY_DELAY_SECONDS`
+- `VIDEO_OUTPUT_DIR`
+- `VIDEO_DEFAULT_WIDTH`
+- `VIDEO_DEFAULT_HEIGHT`
+- `VIDEO_DEFAULT_FPS`
+- `VIDEO_DEFAULT_AUDIO_ENABLED`
+- `VIDEO_DEFAULT_AUDIO_VOLUME`
+- `VIDEO_AUDIO_GAIN`
+- `VIDEO_AUDIO_NORMALIZE_PEAK`
+- `VIDEO_ACTION_SPEED`
+- `VIDEO_WINDOW_SCALE`
+- `VIDEO_WINDOW_BACKGROUND_COLOR`
+- `VIDEO_WINDOW_SHADOW_STRENGTH`
+- `VIDEO_WINDOW_BORDER_RADIUS`
+- `VIDEO_PRE_ACTION_HOLD_SECONDS`
+- `VIDEO_ZOOM_SECONDS`
+- `VIDEO_CURSOR_TRAVEL_SECONDS`
+- `VIDEO_ACTION_HOLD_SECONDS`
+- `VIDEO_PAGE_SETTLE_SECONDS`
+- `VIDEO_RELEASE_SECONDS`
+- `VIDEO_TYPING_FRAME_SECONDS`
+- `VIDEO_RANDOM_SEED`

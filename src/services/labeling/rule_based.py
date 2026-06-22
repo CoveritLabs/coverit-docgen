@@ -18,6 +18,12 @@ from src.services.labeling.page_analyzer import get_page_info
 from src.utils.html_tools import clean_element
 
 
+async def handle_locator(html: str, locator: str) -> tuple[str, str]:
+    """Resolve and mark a Playwright locator in an HTML snapshot."""
+
+    return await playwright_manager.resolve_locator(html, locator)
+
+
 def label_crawler_state(state: CrawlerState) -> LabeledState:
     """Create a page-level label for one crawler state."""
     soup = BeautifulSoup(state.html, "html.parser")
@@ -39,9 +45,7 @@ async def label_crawler_transition(
     """
 
     async def get_element(locator: str):
-        modified_html, element_id = await playwright_manager.resolve_locator(
-            from_state.html, locator
-        )
+        modified_html, element_id = await handle_locator(from_state.html, locator)
         soup = BeautifulSoup(modified_html, "html.parser")
         element = soup.find(attrs={"data-pw-locator": element_id})
         if element is None:
@@ -67,10 +71,9 @@ async def label_crawler_transition(
     last_element = None
     last_name = None
 
-    if not transition.action_value:
-        raise ValueError("Transition has no action values to label")
+    action_values = transition.action_value or [{"s": transition.locator, "t": "", "v": None}]
 
-    for action in transition.action_value:
+    for action in action_values:
         element, soup = await get_element(action["s"])
         last_element = element
 

@@ -169,5 +169,6 @@ class BddRepository:
             name=name,
             description=row.get(f"{prefix}_description") or "",
             url=row.get(f"{prefix}_url") or "",
+            html=row.get(f"{prefix}_html") or "",
             labeling_status=row.get(f"{prefix}_status") or "",
         )

@@ -10,7 +10,8 @@ from src.core.config import get_settings
 from src.core.neo import neo_manager
 from src.models.bdd import BddGenerationInput
 from src.repositories.bdd_repo import BddRepository
-from src.services.bdd.regression import compile_bdd
+from src.services.assertions import SemanticAssertionService
+from src.services.bdd.regression import compile_bdd, scenario_names_for_flows
 
 settings = get_settings()
 logger = logging.getLogger("arq.worker.bdd")
@@ -131,9 +132,14 @@ async def task_generate_bdd(ctx: dict, payload: dict) -> dict:
             state_hashes,
         )
 
+    semantic_assertions_by_flow_index = await SemanticAssertionService(settings).generate(
+        flows,
+        scenario_names_for_flows(flows),
+    )
     compiled = compile_bdd(
         flows,
         outgoing_locators,
+        semantic_assertions_by_flow_index=semantic_assertions_by_flow_index,
         split_features=settings.bdd_split_features,
         feature_similarity_threshold=settings.bdd_feature_similarity_threshold,
         singleton_merge_threshold=settings.bdd_singleton_merge_threshold,
@@ -157,7 +163,7 @@ async def task_generate_bdd(ctx: dict, payload: dict) -> dict:
         ],
         "states": compiled.states,
         "transitions": compiled.transitions,
-        "assertions": {},
+        "assertions": compiled.assertions,
         "action_hooks": {},
     }
 
@@ -172,5 +178,38 @@ async def task_generate_bdd(ctx: dict, payload: dict) -> dict:
         BULLMQ_JOB_NAME,
         result_payload,
     )
+    save_result_payload(result_payload, "artifacts")
 
     return result_payload
+
+
+import json
+from pathlib import Path
+
+
+def save_result_payload(result_payload: dict, output_dir: str = "output") -> None:
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    # Save full JSON
+    json_path = output_path / "result.json"
+    with open(json_path, "w", encoding="utf-8") as f:
+        json.dump(result_payload, f, indent=4, ensure_ascii=False)
+
+    # Save feature files from result_payload["features"]
+    for feature in result_payload.get("features", []):
+        feature_name = feature["feature_name"]
+        feature_text = feature["feature_text"]
+
+        feature_file = output_path / f"{feature_name}.feature"
+
+        with open(feature_file, "w", encoding="utf-8") as f:
+            f.write(feature_text)
+
+    # Save top-level feature_text if it exists
+    if "feature_text" in result_payload:
+        feature_name = result_payload.get("feature_name", "main_feature")
+        feature_file = output_path / f"{feature_name}.feature"
+
+        with open(feature_file, "w", encoding="utf-8") as f:
+            f.write(result_payload["feature_text"])
