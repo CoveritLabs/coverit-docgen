@@ -1,5 +1,5 @@
 from typing import Literal
-
+from typing import Optional
 from pydantic import BaseModel, Field
 
 
@@ -34,12 +34,3 @@ class ResolvedGuidePath(BaseModel):
     start_state: ResolvedGuideState
     end_state: ResolvedGuideState
     transitions: list[ResolvedGuideTransition] = Field(default_factory=list)
-
-
-class UserGuideResult(BaseModel):
-    status: Literal["success"]
-    session_id: str
-    start_state_hash: str
-    end_state_hash: str
-    guide: str
-    step_count: int
