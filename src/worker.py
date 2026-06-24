@@ -52,7 +52,7 @@ async def startup(ctx: dict) -> None:
     await playwright_manager.start()
     logger.info("Worker initialized external connections")
     payload = {
-        "session_id": "a02caae1-ac52-4458-ac64-61272cbf74df",
+        "graph_id": "a02caae1-ac52-4458-ac64-61272cbf74df",
         "flows": [
             {
                 "checkpoint_hash": "b4e52123b8c2da1abf6b18c23e94b4f39e4e1ed1a73f199917612c574e7772b0",
@@ -65,31 +65,27 @@ async def startup(ctx: dict) -> None:
         ],
     }
     guides_payload = {
-        "session_id": "4815ce8f-8233-4786-9f43-dee9f48b1af9",
+        "graph_id": "4815ce8f-8233-4786-9f43-dee9f48b1af9",
         "start_state_hash": "2080d89bad002cd649be78af6e80ab6c479bb820c523084828f28a4fec2ebf50",
         "end_state_hash": "65e803f3a41d4af684c2b2f708d649609c6dd061496e5206872a0f6f6ec5f6a9",
     }
     bdd_payload = {
-        "session_id": "a02caae1-ac52-4458-ac64-61272cbf74df",
+        "graph_id": "5be4d1d6-9fbd-4663-9ebd-6a021d9762d8",
+        "session_id": "5be4d1d6-9fbd-4663-9ebd-6a021d9762d8",
         "flows": [
             {
-                "checkpoint_hash": "b4e52123b8c2da1abf6b18c23e94b4f39e4e1ed1a73f199917612c574e7772b0",
+                "checkpoint_hash": "45e3bf1699fbc67091c51c0fe3293580d128f63b77e67df217c368dd9dd99dad",
                 "transition_ids": [
-                    "4e802e0fd4d2a1fe4b74438d9e15444facf2cbd954be46106c1d19725d9f3765"
+                    "b62a3d6ba6f895e8ebe7faff448a2dfd182c62684f93c26a3f40fd9ba39319c4"
                 ],
             },
-            {
-                "checkpoint_hash": "2080d89bad002cd649be78af6e80ab6c479bb820c523084828f28a4fec2ebf50",
-                "transition_ids": [
-                    "1eff2d62c4839b4d8768f7872f5075ac59badb669fd9932b7c1da0dee117e280",
-                ],
-            },
-            {
-                "checkpoint_hash": "08ab3ecd8d43afcae359f084ee19bc676b5a1d62e3778017f475bd4e9269602a",
-                "transition_ids": [
-                    "6aba9a0e0f9f636fff2268bdff7af09282a5b992b374877b3821d2c07c72e7ed",
-                ],
-            },
+            # {
+            #     "checkpoint_hash": "458a29b4f8c2bc3b53808de0ce4f272ba7057adb025251962d44cea575e555a2",
+            #     "transition_ids": [
+            #         "233a6a6e4aa6cce0103ae2960c10a62ee644189eefaee0d1e728c22389dc416a",
+            #         "e55b5430bfc2a17e9ec3ce9d0256f0a5f28f6a85c60ab54e1beeaa7fa12ef13f"
+            #     ],
+            # },
         ],
     }
     # await ctx["redis"].enqueue_job(

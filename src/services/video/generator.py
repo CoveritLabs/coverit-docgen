@@ -13,14 +13,14 @@ from src.services.video.timeline import build_timelines
 
 
 class VideoGenerator:
-    """Orchestrates timeline expansion, rendering, audio, and MP4 encoding."""
+    """Orchestrates timeline expansion, rendering, and MP4 encoding."""
 
     def __init__(self, config: VideoRenderConfig):
         self.config = config
 
     async def generate(
         self,
-        session_id: str,
+        graph_id: str,
         flows: list[VideoResolvedFlow],
         output_dir: Path,
     ) -> VideoGenerationResult:
@@ -29,7 +29,7 @@ class VideoGenerator:
             raise ValueError("No video shots were produced from the requested flows")
 
         output_dir.mkdir(parents=True, exist_ok=True)
-        artifact_path = output_dir / f"{session_id}-video.mp4"
+        artifact_path = output_dir / f"{graph_id}-video.mp4"
 
         with tempfile.TemporaryDirectory(prefix="coverit-video-") as temp:
             frame_dir = Path(temp) / "frames"
@@ -46,7 +46,7 @@ class VideoGenerator:
 
         return VideoGenerationResult(
             status="success",
-            session_id=session_id,
+            graph_id=graph_id,
             artifact_path=str(artifact_path),
             duration_seconds=round(render_output.duration_seconds, 3),
             resolution=f"{self.config.width}x{self.config.height}",

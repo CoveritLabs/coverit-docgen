@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, Mock, patch
 from arq import Retry
 
 from src.models.bdd import (
+    BddTransitionAction,
     BddFlowInput,
     FeaturePlan,
     ResolvedFlow,
@@ -17,7 +18,7 @@ from src.models.bdd import (
 )
 from src.models.queries import (
     CLAIM_BDD_FLOW_LABELING,
-    CLAIM_BDD_SESSION_LABELING,
+    CLAIM_BDD_GRAPH_LABELING,
     GET_BDD_FLOW_LABELING_STATUS,
     GET_BDD_LABELING_STATUS,
     GET_BDD_OUTGOING_LOCATORS,
@@ -73,17 +74,55 @@ def transition(db_id, transition_id, name, from_state, to_state):
     )
 
 
+def resolved_row(**overrides):
+    row = {
+        "flow_index": 0,
+        "transition_index": 0,
+        "checkpoint_db_id": "s1",
+        "checkpoint_hash": "start",
+        "checkpoint_name": "Start Page",
+        "checkpoint_description": "",
+        "checkpoint_url": "/",
+        "checkpoint_html": "<h1>Start</h1>",
+        "checkpoint_status": "COMPLETED",
+        "transition_db_id": "t1",
+        "transition_id": "go",
+        "transition_name": "Go",
+        "transition_action": "Click Go",
+        "action_type": "click",
+        "locator_value": "#go",
+        "action_value": "",
+        "transition_status": "COMPLETED",
+        "from_db_id": "s1",
+        "from_hash": "start",
+        "from_name": "Start Page",
+        "from_description": "",
+        "from_url": "/",
+        "from_html": "<h1>Start</h1>",
+        "from_status": "COMPLETED",
+        "to_db_id": "s2",
+        "to_hash": "end",
+        "to_name": "End Page",
+        "to_description": "",
+        "to_url": "/end",
+        "to_html": "<h1>End</h1>",
+        "to_status": "COMPLETED",
+    }
+    row.update(overrides)
+    return row
+
+
 class BddQueryTests(unittest.TestCase):
-    def test_preflight_and_claim_are_session_scoped(self):
+    def test_preflight_and_claim_are_graph_scoped(self):
         self.assertGreaterEqual(
             GET_BDD_LABELING_STATUS.count(
-                "{session_id: $session_id}"
+                "{graph_id: $graph_id}"
             ),
             3,
         )
-        self.assertIn("labeling_status IS NULL", CLAIM_BDD_SESSION_LABELING)
-        self.assertIn("labeling_claim_id = $claim_id", CLAIM_BDD_SESSION_LABELING)
-        self.assertIn("labeling_status = 'QUEUED'", CLAIM_BDD_SESSION_LABELING)
+        self.assertIn("labeling_status IS NULL", CLAIM_BDD_GRAPH_LABELING)
+        self.assertIn("labeling_claim_id = $claim_id", CLAIM_BDD_GRAPH_LABELING)
+        self.assertIn("labeling_status = 'QUEUED'", CLAIM_BDD_GRAPH_LABELING)
 
     def test_flow_preflight_and_claim_are_requested_flow_scoped(self):
         self.assertIn("UNWIND $flows AS flow", GET_BDD_FLOW_LABELING_STATUS)
@@ -94,15 +133,16 @@ class BddQueryTests(unittest.TestCase):
         self.assertIn("flow.transition_ids", CLAIM_BDD_FLOW_LABELING)
         self.assertIn("labeling_claim_id = $claim_id", CLAIM_BDD_FLOW_LABELING)
 
-    def test_resolution_preserves_input_order_and_session(self):
+    def test_resolution_preserves_input_order_and_graph(self):
         self.assertIn("flow.flow_index", RESOLVE_BDD_FLOWS)
         self.assertIn("transition_index", RESOLVE_BDD_FLOWS)
         self.assertIn("ORDER BY flow_index, transition_index", RESOLVE_BDD_FLOWS)
         self.assertIn("checkpoint.html AS checkpoint_html", RESOLVE_BDD_FLOWS)
         self.assertIn("from.html AS from_html", RESOLVE_BDD_FLOWS)
         self.assertIn("to.html AS to_html", RESOLVE_BDD_FLOWS)
+        self.assertIn("transition.action_value AS action_value", RESOLVE_BDD_FLOWS)
         self.assertGreaterEqual(
-            RESOLVE_BDD_FLOWS.count("session_id: $session_id"),
+            RESOLVE_BDD_FLOWS.count("graph_id: $graph_id"),
             4,
         )
         self.assertIn("$state_hashes", GET_BDD_OUTGOING_LOCATORS)
@@ -141,11 +181,110 @@ class BddCompilerTests(unittest.TestCase):
             compiled.states["S_SHOPPING_HOME_PAGE"]["dom"]["elements"],
             {"#open-cart": {"cssSelector": "#open-cart"}},
         )
+        transition_mapping = compiled.transitions["T_OPEN_SHOPPING_CART"]
+        self.assertNotIn("action", transition_mapping)
         self.assertEqual(
-            compiled.transitions["T_OPEN_SHOPPING_CART"]["action"]["stateId"],
-            "S_SHOPPING_HOME_PAGE",
+            transition_mapping["actions"],
+            [
+                {
+                    "type": "click",
+                    "stateId": "S_SHOPPING_HOME_PAGE",
+                    "locatorKey": "#open-cart",
+                }
+            ],
         )
         self.assertEqual(compiled.assertions, {})
+
+    def test_compiles_multistep_transition_actions_and_locators(self):
+        login = state("s1", "login", "Login Page")
+        dashboard = state("s2", "dashboard", "Dashboard Page")
+        submit_login = ResolvedTransition(
+            db_id="t1",
+            transition_id="login",
+            name="Login",
+            action='Fill "Email" then Click "Sign in"',
+            action_type="click",
+            locator_value="#submit",
+            actions=[
+                BddTransitionAction(
+                    selector="#email",
+                    action_type="type",
+                    value="user@example.com",
+                ),
+                BddTransitionAction(selector="#submit", action_type="click"),
+            ],
+            labeling_status="COMPLETED",
+            from_state=login,
+            to_state=dashboard,
+        )
+
+        compiled = compile_bdd(
+            [ResolvedFlow(checkpoint=login, transitions=[submit_login])],
+            {"login": []},
+        )
+
+        transition_mapping = compiled.transitions["T_LOGIN"]
+        self.assertEqual(
+            transition_mapping["actions"],
+            [
+                {
+                    "type": "fill",
+                    "stateId": "S_LOGIN_PAGE",
+                    "locatorKey": "#email",
+                    "value": "user@example.com",
+                },
+                {
+                    "type": "click",
+                    "stateId": "S_LOGIN_PAGE",
+                    "locatorKey": "#submit",
+                },
+            ],
+        )
+        self.assertEqual(
+            compiled.states["S_LOGIN_PAGE"]["dom"]["elements"],
+            {
+                "#email": {"cssSelector": "#email"},
+                "#submit": {"cssSelector": "#submit"},
+            },
+        )
+
+    def test_compiles_navigate_action_with_url(self):
+        home = state("s1", "home", "Home Page")
+        account = state("s2", "account", "Account Page")
+        open_account = ResolvedTransition(
+            db_id="t1",
+            transition_id="open-account",
+            name="Open Account",
+            action="Navigate to account",
+            action_type="navigate",
+            locator_value="https://shop.example.com/account",
+            actions=[
+                BddTransitionAction(
+                    selector="https://shop.example.com/account",
+                    action_type="navigate",
+                    value="https://shop.example.com/account",
+                )
+            ],
+            labeling_status="COMPLETED",
+            from_state=home,
+            to_state=account,
+        )
+
+        compiled = compile_bdd(
+            [ResolvedFlow(checkpoint=home, transitions=[open_account])],
+            {"home": []},
+        )
+
+        action = compiled.transitions["T_OPEN_ACCOUNT"]["actions"][0]
+        self.assertEqual(
+            action,
+            {
+                "type": "navigate",
+                "stateId": "S_HOME_PAGE",
+                "url": "https://shop.example.com/account",
+            },
+        )
+        self.assertEqual(compiled.states["S_HOME_PAGE"]["dom"]["elements"], {})
 
     def test_compiles_scenario_level_semantic_assertion(self):
         home = state("s1", "home", "Product Page")
@@ -535,6 +674,7 @@ class BddRepositoryTests(unittest.IsolatedAsyncioTestCase):
                     "transition_action": "Click Go",
                     "action_type": "click",
                     "locator_value": "#go",
+                    "action_value": "",
                     "transition_status": "COMPLETED",
                     "from_db_id": "s1",
                     "from_hash": "start",
@@ -568,6 +708,36 @@ class BddRepositoryTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(flows[0].flow_id, "flow-1")
+        self.assertEqual(flows[0].transitions[0].actions[0].selector, "#go")
+        self.assertEqual(flows[0].transitions[0].actions[0].action_type, "click")
+
+    async def test_resolved_transition_parses_multistep_action_value(self):
+        result = Mock()
+        result.data = AsyncMock(
+            return_value=[
+                resolved_row(
+                    transition_id="login",
+                    transition_name="Login",
+                    transition_action='Fill "Email" then Click "Sign in"',
+                    action_value=(
+                        '[{"s":"#email","t":"type","v":"user@example.com"},'
+                        '{"s":"#submit","t":"click","d":"Click Sign in"}]'
+                    ),
+                )
+            ]
+        )
+        session = Mock()
+        session.run = AsyncMock(return_value=result)
+
+        flows = await BddRepository(session).resolve_flows(
+            "graph-1",
+            [BddFlowInput(checkpoint_hash="start", transition_ids=["login"])],
+        )
+
+        actions = flows[0].transitions[0].actions
+        self.assertEqual([action.selector for action in actions], ["#email", "#submit"])
+        self.assertEqual([action.action_type for action in actions], ["fill", "click"])
+        self.assertEqual(actions[0].value, "user@example.com")
 
     async def test_disconnected_flow_is_rejected(self):
         result = Mock()
@@ -612,7 +782,7 @@ class BddRepositoryTests(unittest.IsolatedAsyncioTestCase):
 
         with self.assertRaisesRegex(ValueError, "does not continue"):
             await BddRepository(session).resolve_flows(
-                "session",
+                "graph-1",
                 [
                     BddFlowInput(
                         checkpoint_hash="start",
@@ -652,7 +822,7 @@ class BddTaskTests(unittest.IsolatedAsyncioTestCase):
                 await task_generate_bdd(
                     {"redis": redis, "job_try": 1},
                     {
-                        "session_id": "session",
+                        "graph_id": "graph-1",
                         "flows": [
                             {
                                 "checkpoint_hash": "start",
@@ -664,10 +834,10 @@ class BddTaskTests(unittest.IsolatedAsyncioTestCase):
 
         redis.enqueue_job.assert_awaited_once_with(
             "task_label_graph",
-            "session",
+            "graph-1",
         )
         repo.claim_unlabeled.assert_awaited_once()
-        self.assertEqual(repo.claim_unlabeled.await_args.args[0], "session")
+        self.assertEqual(repo.claim_unlabeled.await_args.args[0], "graph-1")
         self.assertEqual(
             repo.claim_unlabeled.await_args.args[2],
             repo.get_labeling_status.await_args.args[1],
@@ -699,25 +869,27 @@ class BddTaskTests(unittest.IsolatedAsyncioTestCase):
             patch("src.tasks.bdd.neo_manager.driver", Driver(Mock())),
             patch("src.tasks.bdd.BddRepository", return_value=repo),
         ):
-            with self.assertRaisesRegex(RuntimeError, "down"):
-                await task_generate_bdd(
-                    {"redis": redis, "job_try": 1},
-                    {
-                        "session_id": "session",
-                        "flows": [
-                            {
-                                "checkpoint_hash": "start",
-                                "transition_ids": ["go"],
-                            }
-                        ],
-                    },
-                )
+            result = await task_generate_bdd(
+                {"redis": redis, "job_try": 1},
+                {
+                    "graph_id": "graph-1",
+                    "flows": [
+                        {
+                            "checkpoint_hash": "start",
+                            "transition_ids": ["go"],
+                        }
+                    ],
+                },
+            )
 
         repo.rollback_claim.assert_awaited_once_with(
-            "session",
+            "graph-1",
             ["s1"],
             [],
         )
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["graph_id"], "graph-1")
+        self.assertEqual(result["lastError"], "down")
 
     async def test_success_payload_contains_features_and_bullmq_job(self):
         home = state("s1", "home", "Shopping Home Page")
@@ -754,8 +926,8 @@ class BddTaskTests(unittest.IsolatedAsyncioTestCase):
             result = await task_generate_bdd(
                 {"redis": redis, "job_try": 1},
                 {
-                    "session_id": "session",
                     "graph_id": "graph-1",
+                    "session_id": "session-1",
                     "flow_ids": ["flow-top"],
                     "regression_codebase_id": "codebase-1",
                     "codegen_config": {
@@ -773,7 +945,7 @@ class BddTaskTests(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertEqual(len(result["features"]), 1)
-        self.assertEqual(result["session_id"], "session")
+        self.assertEqual(result["graph_id"], "graph-1")
         self.assertEqual(result["feature_name"], "Shopping User Flows")
         self.assertIn("feature_text", result)
         self.assertIn("# Flow ID: flow-1", result["feature_text"])
@@ -797,10 +969,66 @@ class BddTaskTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(repo.resolve_flows.await_args.args[0], "graph-1")
         repo.get_outgoing_locators.assert_awaited_once()
         self.assertEqual(repo.get_outgoing_locators.await_args.args[0], "graph-1")
-        self.assertEqual(enqueue.await_args.args[3]["session_id"], "session")
+        self.assertEqual(enqueue.await_args.args[3]["graph_id"], "graph-1")
         self.assertEqual(enqueue.await_args.args[3]["flow_ids"], ["flow-top", "flow-1"])
         self.assertEqual(enqueue.await_args.args[3]["regression_codebase_id"], "codebase-1")
         self.assertFalse(Path("src/session.feature").exists())
+
+    async def test_artifact_save_failure_does_not_enqueue_bullmq_job(self):
+        home = state("s1", "home", "Shopping Home Page")
+        cart = state("s2", "cart", "Shopping Cart Page")
+        flow = ResolvedFlow(
+            flow_id="flow-1",
+            checkpoint=home,
+            transitions=[
+                transition("t1", "open-cart", "Open Shopping Cart", home, cart)
+            ],
+        )
+        repo = Mock()
+        repo.get_labeling_status = AsyncMock(
+            return_value={
+                "state_count": 2,
+                "transition_count": 1,
+                "pending_states": 0,
+                "pending_transitions": 0,
+                "queued_states": 0,
+                "queued_transitions": 0,
+                "invalid_states": 0,
+                "invalid_transitions": 0,
+            }
+        )
+        repo.resolve_flows = AsyncMock(return_value=[flow])
+        repo.get_outgoing_locators = AsyncMock(return_value={"home": ["#cart"]})
+        redis = Mock()
+
+        with (
+            patch("src.tasks.bdd.neo_manager.driver", Driver(Mock())),
+            patch("src.tasks.bdd.BddRepository", return_value=repo),
+            patch(
+                "src.tasks.bdd.save_result_payload",
+                side_effect=RuntimeError("disk down"),
+            ),
+            patch("src.tasks.bdd._enqueue_bullmq_job", new=AsyncMock()) as enqueue,
+        ):
+            result = await task_generate_bdd(
+                {"redis": redis, "job_try": 1},
+                {
+                    "graph_id": "graph-1",
+                    "session_id": "session-1",
+                    "flows": [
+                        {
+                            "flow_id": "flow-1",
+                            "checkpoint_hash": "home",
+                            "transition_ids": ["open-cart"],
+                        }
+                    ],
+                },
+            )
+
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["graph_id"], "graph-1")
+        self.assertEqual(result["lastError"], "disk down")
+        enqueue.assert_not_awaited()
 
 
 class LoggingStyleTests(unittest.TestCase):

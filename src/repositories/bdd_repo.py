@@ -5,10 +5,11 @@ from src.models.bdd import (
     ResolvedFlow,
     ResolvedState,
     ResolvedTransition,
+    parse_bdd_action_values,
 )
 from src.models.queries import (
     CLAIM_BDD_FLOW_LABELING,
-    CLAIM_BDD_SESSION_LABELING,
+    CLAIM_BDD_GRAPH_LABELING,
     GET_BDD_FLOW_LABELING_STATUS,
     GET_BDD_LABELING_STATUS,
     GET_BDD_OUTGOING_LOCATORS,
@@ -25,41 +26,41 @@ class BddRepository:
 
     async def get_labeling_status(
         self,
-        session_id: str,
+        graph_id: str,
         flows: list[BddFlowInput] | None = None,
     ) -> dict:
         if flows is None:
             result = await self.session.run(
                 GET_BDD_LABELING_STATUS,
-                session_id=session_id,
+                graph_id=graph_id,
             )
         else:
             result = await self.session.run(
                 GET_BDD_FLOW_LABELING_STATUS,
-                session_id=session_id,
+                graph_id=graph_id,
                 flows=self._query_flows(flows),
             )
         record = await result.single()
         if record is None:
-            raise ValueError(f"Session {session_id} was not found")
+            raise ValueError(f"Graph {graph_id} was not found")
         return dict(record)
 
     async def claim_unlabeled(
         self,
-        session_id: str,
+        graph_id: str,
         claim_id: str,
         flows: list[BddFlowInput] | None = None,
     ) -> dict:
         if flows is None:
             result = await self.session.run(
-                CLAIM_BDD_SESSION_LABELING,
-                session_id=session_id,
+                CLAIM_BDD_GRAPH_LABELING,
+                graph_id=graph_id,
                 claim_id=claim_id,
             )
         else:
             result = await self.session.run(
                 CLAIM_BDD_FLOW_LABELING,
-                session_id=session_id,
+                graph_id=graph_id,
                 claim_id=claim_id,
                 flows=self._query_flows(flows),
             )
@@ -75,13 +76,13 @@ class BddRepository:
 
     async def rollback_claim(
         self,
-        session_id: str,
+        graph_id: str,
         state_ids: list[str],
         transition_ids: list[str],
     ) -> None:
         result = await self.session.run(
             ROLLBACK_CLAIMED_ITEMS,
-            session_id=session_id,
+            graph_id=graph_id,
             state_ids=state_ids,
             transition_ids=transition_ids,
         )
@@ -89,12 +90,12 @@ class BddRepository:
 
     async def resolve_flows(
         self,
-        session_id: str,
+        graph_id: str,
         flows: list[BddFlowInput],
     ) -> list[ResolvedFlow]:
         result = await self.session.run(
             RESOLVE_BDD_FLOWS,
-            session_id=session_id,
+            graph_id=graph_id,
             flows=self._query_flows(flows),
         )
         records = await result.data()
@@ -111,7 +112,7 @@ class BddRepository:
             if not rows or rows[0].get("checkpoint_db_id") is None:
                 raise ValueError(
                     f"Checkpoint {requested.checkpoint_hash} was not found "
-                    f"in session {session_id}"
+                    f"in graph {graph_id}"
                 )
             if len(rows) != len(requested.transition_ids):
                 raise ValueError(f"Flow {flow_index} did not resolve completely")
@@ -124,8 +125,8 @@ class BddRepository:
                 requested_id = requested.transition_ids[transition_index]
                 if row.get("transition_db_id") is None:
                     raise ValueError(
-                        f"Transition {requested_id} was not found in session "
-                        f"{session_id}"
+                        f"Transition {requested_id} was not found in graph "
+                        f"{graph_id}"
                     )
                 if not row.get("transition_name"):
                     raise ValueError(f"Transition {requested_id} has no label")
@@ -148,6 +149,11 @@ class BddRepository:
                         action=row["transition_action"] or "",
                         action_type=row["action_type"] or "",
                         locator_value=row["locator_value"] or "",
+                        actions=parse_bdd_action_values(
+                            row.get("action_value"),
+                            row["locator_value"] or "",
+                            row["action_type"] or "",
+                        ),
                         labeling_status=row["transition_status"] or "",
                         from_state=from_state,
                         to_state=to_state,
@@ -166,12 +172,12 @@ class BddRepository:
 
     async def get_outgoing_locators(
         self,
-        session_id: str,
+        graph_id: str,
         state_hashes: list[str],
     ) -> dict[str, list[str]]:
         result = await self.session.run(
             GET_BDD_OUTGOING_LOCATORS,
-            session_id=session_id,
+            graph_id=graph_id,
             state_hashes=state_hashes,
         )
         records = await result.data()

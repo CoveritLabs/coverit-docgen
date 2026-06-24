@@ -15,7 +15,7 @@ class VideoRenderConfig:
     # When the camera is "zoomed out", the captured page sits as a small
     # floating card on a solid background.  ``window_scale`` is the
     # fraction of the frame the card occupies at rest (~0.72 wide).
-    window_scale: float = 0.72
+    window_scale: float = 0.86
     window_corner_radius: int = 14
     window_background_color: Tuple[int, int, int] = (245, 245, 245)
     window_shadow_offset_y: int = 8
@@ -52,4 +52,5 @@ def get_video_render_config() -> VideoRenderConfig:
         fps=settings.video_default_fps,
         action_speed=settings.video_action_speed,
         random_seed=settings.video_random_seed,
+        window_scale=settings.video_window_scale,
     )

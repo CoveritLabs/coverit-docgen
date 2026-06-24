@@ -11,8 +11,8 @@ from src.models.graph import (
     LabeledTransition,
 )
 from src.models.queries import (
-    GET_QUEUED_SESSION_STATES,
-    GET_QUEUED_SESSION_TRANSITIONS,
+    GET_QUEUED_GRAPH_STATES,
+    GET_QUEUED_GRAPH_TRANSITIONS,
     GET_STATE,
     GET_TRANSITION,
     ROLLBACK_CLAIMED_ITEMS,
@@ -79,9 +79,9 @@ class LabelingRepository:
 
         if not record:
             raise ValueError(f"Transition with id {transition_id} not found")
-        if record["session_id"] != record["to_session_id"]:
+        if record["graph_id"] != record["to_graph_id"]:
             raise ValueError(
-                f"Transition {transition_id} connects states from different sessions"
+                f"Transition {transition_id} connects states from different graphs"
             )
         parsed_action = json.loads(record["action_value"]) if record["action_value"] else []
         return CrawlerTransition(
@@ -92,8 +92,8 @@ class LabelingRepository:
             action_value=parsed_action
         )
 
-    async def get_graph(self, session_id: str) -> CrawlerGraph | None:
-        """Return only records currently queued for one session.
+    async def get_graph(self, graph_id: str) -> CrawlerGraph | None:
+        """Return only records currently queued for one graph.
 
         Completed records are excluded. Origin states needed solely to label queued
         transitions are included in ``states`` and marked in ``skip_states`` so
@@ -104,7 +104,7 @@ class LabelingRepository:
         transitions: list[CrawlerTransition] = []
 
         states_result = await self.session.run(
-            GET_QUEUED_SESSION_STATES, session_id=session_id
+            GET_QUEUED_GRAPH_STATES, graph_id=graph_id
         )
         async for record in states_result:
             states[record["id"]] = CrawlerState(
@@ -114,7 +114,7 @@ class LabelingRepository:
             )
 
         transitions_result = await self.session.run(
-            GET_QUEUED_SESSION_TRANSITIONS, session_id=session_id
+            GET_QUEUED_GRAPH_TRANSITIONS, graph_id=graph_id
         )
         async for record in transitions_result:
             parsed_action = json.loads(record["action_value"]) if record["action_value"] else []
@@ -136,11 +136,11 @@ class LabelingRepository:
                 skip_states.add(record["from_id"])
 
         if not transitions and not states:
-            logger.warning(f"No queued data found for session {session_id}")
+            logger.warning(f"No queued data found for graph {graph_id}")
             return None
 
         return CrawlerGraph(
-            session_id=session_id,
+            graph_id=graph_id,
             states=states,
             transitions=transitions,
             skip_states=skip_states,
@@ -166,14 +166,14 @@ class LabelingRepository:
 
     async def rollback_claim(
         self,
-        session_id: str,
+        graph_id: str,
         state_ids: list[str],
         transition_ids: list[str],
     ) -> None:
         """Return exactly the supplied queued claim to pending."""
         result = await self.session.run(
             ROLLBACK_CLAIMED_ITEMS,
-            session_id=session_id,
+            graph_id=graph_id,
             state_ids=state_ids,
             transition_ids=transition_ids,
         )

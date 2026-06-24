@@ -82,15 +82,15 @@ def transition_mapping(db_id, transition_id, action, status="COMPLETED"):
 
 
 class GuideQueryTests(unittest.TestCase):
-    def test_shortest_path_query_is_session_scoped_and_hash_based(self):
+    def test_shortest_path_query_is_graph_scoped_and_hash_based(self):
         self.assertIn("state_hash: $start_state_hash", RESOLVE_SHORTEST_GUIDE_PATH)
         self.assertIn("state_hash: $end_state_hash", RESOLVE_SHORTEST_GUIDE_PATH)
         self.assertGreaterEqual(
-            RESOLVE_SHORTEST_GUIDE_PATH.count("session_id: $session_id"),
+            RESOLVE_SHORTEST_GUIDE_PATH.count("graph_id: $graph_id"),
             2,
         )
         self.assertIn("shortestPath", RESOLVE_SHORTEST_GUIDE_PATH)
-        self.assertIn("transition.session_id = $session_id", RESOLVE_SHORTEST_GUIDE_PATH)
+        self.assertIn("transition.graph_id = $graph_id", RESOLVE_SHORTEST_GUIDE_PATH)
 
     def test_query_returns_ordered_path_lists(self):
         self.assertIn("state IN nodes(path)", RESOLVE_SHORTEST_GUIDE_PATH)
@@ -284,13 +284,13 @@ class GuideTaskTests(unittest.IsolatedAsyncioTestCase):
                 await task_generate_user_guide(
                     {"redis": redis, "job_try": 1},
                     {
-                        "session_id": "session",
+                        "graph_id": "graph-1",
                         "start_state_hash": "start",
                         "end_state_hash": "end",
                     },
                 )
 
-        redis.enqueue_job.assert_awaited_once_with("task_label_graph", "session")
+        redis.enqueue_job.assert_awaited_once_with("task_label_graph", "graph-1")
         repo.rollback_claim.assert_not_awaited()
 
     async def test_enqueue_failure_rolls_back_exact_claim(self):
@@ -318,17 +318,18 @@ class GuideTaskTests(unittest.IsolatedAsyncioTestCase):
             patch("src.tasks.guides.neo_manager.driver", Driver(Mock())),
             patch("src.tasks.guides.BddRepository", return_value=repo),
         ):
-            with self.assertRaisesRegex(RuntimeError, "down"):
-                await task_generate_user_guide(
-                    {"redis": redis, "job_try": 1},
-                    {
-                        "session_id": "session",
-                        "start_state_hash": "start",
-                        "end_state_hash": "end",
-                    },
-                )
+            result = await task_generate_user_guide(
+                {"redis": redis, "job_try": 1},
+                {
+                    "graph_id": "graph-1",
+                    "start_state_hash": "start",
+                    "end_state_hash": "end",
+                },
+            )
 
-        repo.rollback_claim.assert_awaited_once_with("session", ["s1"], ["t1"])
+        repo.rollback_claim.assert_awaited_once_with("graph-1", ["s1"], ["t1"])
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["lastError"], "down")
 
     async def test_success_returns_guide_and_step_count(self):
         start = guide_state("s1", "start", "Home Page")
@@ -364,15 +365,14 @@ class GuideTaskTests(unittest.IsolatedAsyncioTestCase):
             result = await task_generate_user_guide(
                 {"redis": Mock(), "job_try": 1},
                 {
-                    "session_id": "session",
+                    "graph_id": "graph-1",
                     "start_state_hash": "start",
                     "end_state_hash": "end",
                 },
             )
 
         self.assertEqual(result["status"], "success")
-        self.assertEqual(result["step_count"], 1)
-        self.assertIn('1. Click "Go".', result["guide"])
+        self.assertIn('1. Click "Go".', result["userGuide"])
 
 
 if __name__ == "__main__":

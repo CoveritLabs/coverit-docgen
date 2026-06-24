@@ -17,7 +17,7 @@ class VideoRepository:
 
     async def resolve_flows(
         self,
-        session_id: str,
+        graph_id: str,
         flows: list[BddFlowInput],
     ) -> list[VideoResolvedFlow]:
         query_flows = [
@@ -30,7 +30,7 @@ class VideoRepository:
         ]
         result = await self.session.run(
             RESOLVE_VIDEO_FLOWS,
-            session_id=session_id,
+            graph_id=graph_id,
             flows=query_flows,
         )
         records = await result.data()
@@ -47,7 +47,7 @@ class VideoRepository:
             if not rows or rows[0].get("checkpoint_hash") is None:
                 raise ValueError(
                     f"Checkpoint {requested.checkpoint_hash} was not found "
-                    f"in session {session_id}"
+                    f"in graph {graph_id}"
                 )
             if len(rows) != len(requested.transition_ids):
                 raise ValueError(f"Video flow {flow_index} did not resolve completely")
@@ -64,8 +64,8 @@ class VideoRepository:
                 requested_id = requested.transition_ids[transition_index]
                 if row.get("transition_id") is None:
                     raise ValueError(
-                        f"Transition {requested_id} was not found in session "
-                        f"{session_id}"
+                        f"Transition {requested_id} was not found in graph "
+                        f"{graph_id}"
                     )
 
                 from_hash = row.get("from_hash") or ""

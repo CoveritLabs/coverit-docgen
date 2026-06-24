@@ -1,7 +1,6 @@
 import shutil
 import tempfile
 import unittest
-import wave
 from io import BytesIO
 from pathlib import Path
 from unittest.mock import AsyncMock, Mock, patch
@@ -15,7 +14,6 @@ from src.models.video import (
     parse_video_action_values,
 )
 from src.repositories.video_repo import VideoRepository
-from src.services.video.audio import SoundEvent, render_audio_track
 from src.services.video.config import VideoRenderConfig, get_video_render_config
 from src.services.video.encoder import FfmpegEncoder
 from src.services.video.effects import (
@@ -48,16 +46,6 @@ class Driver:
 
     def session(self):
         return AsyncContext(self._session)
-
-
-def _wav_peak(path: Path) -> int:
-    with wave.open(str(path), "rb") as reader:
-        frames = reader.readframes(reader.getnframes())
-    return max(
-        abs(int.from_bytes(frames[index : index + 2], "little", signed=True))
-        for index in range(0, len(frames), 2)
-    )
-
 
 class FakeKeyboard:
     def __init__(self):
@@ -106,10 +94,7 @@ class VideoModelTests(unittest.TestCase):
         config = get_video_render_config()
         self.assertEqual(config.width, 1280)
         self.assertEqual(config.height, 720)
-        self.assertTrue(config.audio_enabled)
-        self.assertEqual(config.audio_gain, 2.0)
         self.assertEqual(config.action_speed, 1.0)
-        self.assertEqual(config.audio_normalize_peak, 0.9)
         self.assertEqual(config.window_scale, 0.86)
 
     def test_action_value_normalizes_crawler_shorthand(self):
@@ -149,7 +134,7 @@ class VideoEffectTests(unittest.TestCase):
         self.assertLessEqual(camera.crop_y + camera.crop_height, 720)
 
 
-class VideoTypingAudioTests(unittest.TestCase):
+class VideoTypingTests(unittest.TestCase):
     def test_typing_frames_are_seeded(self):
         first = typing_frames("abc", seed=7)
         second = typing_frames("abc", seed=7)
@@ -161,54 +146,6 @@ class VideoTypingAudioTests(unittest.TestCase):
         normal = typing_frames("abc", seed=7, speed=1.0)
         fast = typing_frames("abc", seed=7, speed=2.0)
         self.assertLess(fast[-1].at_seconds, normal[-1].at_seconds)
-
-    def test_audio_track_writes_wav(self):
-        with tempfile.TemporaryDirectory() as temp:
-            path = Path(temp) / "audio.wav"
-            result = render_audio_track(
-                [SoundEvent("click", 0), SoundEvent("keypress", 0.05)],
-                0.2,
-                path,
-                0.5,
-            )
-            self.assertEqual(result, path)
-            self.assertGreater(path.stat().st_size, 44)
-
-    def test_audio_gain_increases_amplitude_and_clamps(self):
-        with tempfile.TemporaryDirectory() as temp:
-            quiet = Path(temp) / "quiet.wav"
-            loud = Path(temp) / "loud.wav"
-            render_audio_track(
-                [SoundEvent("click", 0)],
-                0.1,
-                quiet,
-                0.2,
-                1.0,
-                normalize_peak=0.0,
-            )
-            render_audio_track(
-                [SoundEvent("click", 0)],
-                0.1,
-                loud,
-                0.2,
-                4.0,
-                normalize_peak=0.0,
-            )
-            self.assertLess(_wav_peak(quiet), _wav_peak(loud))
-            self.assertLessEqual(_wav_peak(loud), 32767)
-
-    def test_audio_normalization_makes_quiet_mix_audible(self):
-        with tempfile.TemporaryDirectory() as temp:
-            path = Path(temp) / "normalized.wav"
-            render_audio_track(
-                [SoundEvent("click", 0)],
-                0.1,
-                path,
-                0.05,
-                1.0,
-                normalize_peak=0.8,
-            )
-            self.assertGreater(_wav_peak(path), 20000)
 
 
 class VideoRepositoryTests(unittest.IsolatedAsyncioTestCase):
@@ -244,7 +181,7 @@ class VideoRepositoryTests(unittest.IsolatedAsyncioTestCase):
 
         with self.assertRaisesRegex(ValueError, "does not continue"):
             await VideoRepository(session).resolve_flows(
-                "session",
+                "graph-1",
                 [BddFlowInput(checkpoint_hash="start", transition_ids=["go"])],
             )
 
@@ -287,9 +224,6 @@ class VideoRendererTests(unittest.IsolatedAsyncioTestCase):
             width=320,
             height=180,
             fps=10,
-            audio_enabled=True,
-            audio_volume=1.0,
-            audio_gain=2.0,
             action_speed=4.0,
             random_seed=42,
         )
@@ -320,6 +254,8 @@ class VideoRendererTests(unittest.IsolatedAsyncioTestCase):
                     [timeline],
                     Path(temp),
                 )
+                self.assertGreater(len(output.frame_paths), 0)
+                first_frame = Image.open(output.frame_paths[0]).convert("RGB")
 
         page.goto.assert_awaited_once_with(
             "https://example.test/start",
@@ -328,10 +264,6 @@ class VideoRendererTests(unittest.IsolatedAsyncioTestCase):
         )
         page.locator("#go").first.bounding_box.assert_awaited()
         page.locator("#go").first.click.assert_awaited()
-        self.assertGreater(len(output.frame_paths), 0)
-        from PIL import Image
-
-        first_frame = Image.open(output.frame_paths[0]).convert("RGB")
         self.assertNotEqual(first_frame.getpixel((0, 0)), first_frame.getpixel((160, 90)))
         self.assertGreaterEqual(min(first_frame.getpixel((160, 90))), 240)
 
@@ -343,9 +275,6 @@ class VideoRendererTests(unittest.IsolatedAsyncioTestCase):
             width=320,
             height=180,
             fps=10,
-            audio_enabled=True,
-            audio_volume=1.0,
-            audio_gain=2.0,
             action_speed=5.0,
             random_seed=42,
         )
@@ -382,9 +311,6 @@ class VideoRendererTests(unittest.IsolatedAsyncioTestCase):
                 width=320,
                 height=180,
                 fps=10,
-                audio_enabled=True,
-                audio_volume=1.0,
-                audio_gain=2.0,
                 action_speed=0.5,
                 random_seed=42,
             )
@@ -394,9 +320,6 @@ class VideoRendererTests(unittest.IsolatedAsyncioTestCase):
                 width=320,
                 height=180,
                 fps=10,
-                audio_enabled=True,
-                audio_volume=1.0,
-                audio_gain=2.0,
                 action_speed=2.0,
                 random_seed=42,
             )
@@ -408,45 +331,23 @@ class VideoRendererTests(unittest.IsolatedAsyncioTestCase):
 
 
 class VideoEncoderTests(unittest.TestCase):
-    def test_encoder_maps_audio_explicitly(self):
+    def test_encoder_uses_video_only_command(self):
         with tempfile.TemporaryDirectory() as temp:
             frame = Path(temp) / "frame_00001.png"
-            audio = Path(temp) / "audio.wav"
             output = Path(temp) / "out.mp4"
             with patch("src.services.video.encoder.subprocess.run") as run:
                 run.return_value = Mock(returncode=0, stdout="", stderr="")
-                FfmpegEncoder(ffmpeg_path="ffmpeg", ffprobe_path=None).encode(
+                FfmpegEncoder(ffmpeg_path="ffmpeg").encode(
                     [frame],
                     30,
                     output,
-                    audio,
                 )
 
         command = run.call_args.args[0]
-        self.assertIn("-map", command)
-        self.assertIn("0:v:0", command)
-        self.assertIn("1:a:0", command)
-        self.assertIn("-b:a", command)
-        self.assertIn("192k", command)
-
-    def test_encoder_validates_audio_stream_when_ffprobe_exists(self):
-        with tempfile.TemporaryDirectory() as temp:
-            frame = Path(temp) / "frame_00001.png"
-            audio = Path(temp) / "audio.wav"
-            output = Path(temp) / "out.mp4"
-            with patch("src.services.video.encoder.subprocess.run") as run:
-                run.side_effect = [
-                    Mock(returncode=0, stdout="", stderr=""),
-                    Mock(returncode=0, stdout="audio\n", stderr=""),
-                ]
-                FfmpegEncoder(ffmpeg_path="ffmpeg", ffprobe_path="ffprobe").encode(
-                    [frame],
-                    30,
-                    output,
-                    audio,
-                )
-
-        self.assertEqual(run.call_count, 2)
+        self.assertIn("-c:v", command)
+        self.assertIn("libx264", command)
+        self.assertNotIn("-map", command)
+        self.assertNotIn("-c:a", command)
 
 
 class VideoTaskTests(unittest.IsolatedAsyncioTestCase):
@@ -477,13 +378,55 @@ class VideoTaskTests(unittest.IsolatedAsyncioTestCase):
                 await task_generate_video(
                     {"redis": redis, "job_try": 1},
                     {
-                        "session_id": "session",
+                        "graph_id": "graph-1",
                         "flows": [{"checkpoint_hash": "start", "transition_ids": ["go"]}],
                     },
                 )
 
-        redis.enqueue_job.assert_awaited_once_with("task_label_graph", "session")
+        redis.enqueue_job.assert_awaited_once_with("task_label_graph", "graph-1")
         repo.rollback_claim.assert_not_awaited()
+
+    async def test_enqueue_failure_rolls_back_and_skips_rendering(self):
+        repo = Mock()
+        repo.get_labeling_status = AsyncMock(
+            return_value={
+                "state_count": 1,
+                "transition_count": 1,
+                "pending_states": 1,
+                "pending_transitions": 0,
+                "queued_states": 0,
+                "queued_transitions": 0,
+                "invalid_states": 0,
+                "invalid_transitions": 0,
+            }
+        )
+        repo.claim_unlabeled = AsyncMock(
+            return_value={"state_ids": ["s1"], "transition_ids": []}
+        )
+        repo.rollback_claim = AsyncMock()
+        redis = Mock()
+        redis.enqueue_job = AsyncMock(side_effect=RuntimeError("down"))
+
+        with (
+            patch("src.tasks.video.neo_manager.driver", Driver(Mock())),
+            patch("src.tasks.video.BddRepository", return_value=repo),
+            patch("src.tasks.video.VideoRepository") as video_repo,
+            patch("src.tasks.video.VideoGenerator") as generator,
+        ):
+            result = await task_generate_video(
+                {"redis": redis, "job_try": 1},
+                {
+                    "graph_id": "graph-1",
+                    "flows": [{"checkpoint_hash": "start", "transition_ids": ["go"]}],
+                },
+            )
+
+        repo.rollback_claim.assert_awaited_once_with("graph-1", ["s1"], [])
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["graph_id"], "graph-1")
+        self.assertEqual(result["lastError"], "down")
+        video_repo.assert_not_called()
+        generator.assert_not_called()
 
     async def test_success_returns_artifact_metadata(self):
         repo = Mock()
@@ -505,8 +448,8 @@ class VideoTaskTests(unittest.IsolatedAsyncioTestCase):
         generator.generate = AsyncMock(
             return_value=VideoGenerationResult(
                 status="success",
-                session_id="session",
-                artifact_path="artifacts/videos/session-video.mp4",
+                graph_id="graph-1",
+                artifact_path="artifacts/videos/graph-1-video.mp4",
                 duration_seconds=1.0,
                 resolution="1280x720",
                 fps=30,
@@ -523,13 +466,13 @@ class VideoTaskTests(unittest.IsolatedAsyncioTestCase):
             result = await task_generate_video(
                 {"redis": Mock(), "job_try": 1},
                 {
-                    "session_id": "session",
+                    "graph_id": "graph-1",
                     "flows": [{"checkpoint_hash": "start", "transition_ids": ["go"]}],
                 },
             )
 
         self.assertEqual(result["status"], "success")
-        self.assertEqual(result["artifact_path"], "artifacts/videos/session-video.mp4")
+        self.assertEqual(result["artifact_path"], "artifacts/videos/graph-1-video.mp4")
 
     async def test_payload_config_is_not_forwarded_to_generator(self):
         repo = Mock()
@@ -551,8 +494,8 @@ class VideoTaskTests(unittest.IsolatedAsyncioTestCase):
         generator.generate = AsyncMock(
             return_value=VideoGenerationResult(
                 status="success",
-                session_id="session",
-                artifact_path="artifacts/videos/session-video.mp4",
+                graph_id="graph-1",
+                artifact_path="artifacts/videos/graph-1-video.mp4",
                 duration_seconds=1.0,
                 resolution="1280x720",
                 fps=30,
@@ -569,7 +512,7 @@ class VideoTaskTests(unittest.IsolatedAsyncioTestCase):
             await task_generate_video(
                 {"redis": Mock(), "job_try": 1},
                 {
-                    "session_id": "session",
+                    "graph_id": "graph-1",
                     "flows": [{"checkpoint_hash": "start", "transition_ids": ["go"]}],
                     "config": {"width": 320},
                 },
