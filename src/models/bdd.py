@@ -25,8 +25,7 @@ class BddFlowInput(BaseModel):
 
 
 class BddGenerationInput(BaseModel):
-    session_id: str = Field(min_length=1)
-    graph_id: str | None = None
+    graph_id: str = Field(min_length=1)
     flows: list[BddFlowInput] = Field(min_length=1)
     flow_ids: list[str] = Field(default_factory=list)
     regression_codebase_id: str | None = None

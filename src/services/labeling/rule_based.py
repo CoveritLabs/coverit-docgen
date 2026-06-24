@@ -121,7 +121,7 @@ async def label_crawler_graph(graph: CrawlerGraph) -> LabeledGraph:
         )
 
     return LabeledGraph(
-        session_id=graph.session_id,
+        graph_id=graph.graph_id,
         crawler_graph=graph,
         state_labels=state_labels,
         transition_labels=transition_labels,

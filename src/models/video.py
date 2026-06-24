@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 class VideoGenerationResult(BaseModel):
     status: Literal["success"]
-    session_id: str
+    graph_id: str
     artifact_path: str
     duration_seconds: float
     resolution: str

@@ -3,7 +3,7 @@ import uuid
 
 from src.core.config import get_settings
 from src.core.neo import neo_manager
-from src.models.queries import CLAIM_UNLABELED_SESSIONS
+from src.models.queries import CLAIM_UNLABELED_GRAPHS
 from src.repositories.labeling_repo import LabelingRepository
 
 settings = get_settings()
@@ -11,7 +11,7 @@ logger = logging.getLogger("arq.poller")
 
 
 async def cron_poll_unlabeled_data(ctx: dict) -> None:
-    """Atomically claim pending graph records and enqueue one job per session.
+    """Atomically claim pending graph records and enqueue one job per graph.
 
     Neo4j changes eligible ``NULL``/``PENDING`` records to ``QUEUED`` before
     this function dispatches ARQ jobs. If dispatch fails or ARQ rejects a
@@ -28,28 +28,28 @@ async def cron_poll_unlabeled_data(ctx: dict) -> None:
     queued = 0
     async with neo_manager.driver.session() as session:
         result = await session.run(
-            CLAIM_UNLABELED_SESSIONS,
-            limit=settings.max_sessions_per_poll,
+            CLAIM_UNLABELED_GRAPHS,
+            limit=settings.max_graphs_per_poll,
             claim_id=uuid.uuid4().hex,
         )
         claims = await result.data()
         repo = LabelingRepository(session)
 
         for claim in claims:
-            session_id = claim["id"]
+            graph_id = claim["id"]
             state_ids = claim.get("state_ids") or []
             transition_ids = claim.get("transition_ids") or []
             try:
-                job = await redis.enqueue_job("task_label_graph", session_id)
+                job = await redis.enqueue_job("task_label_graph", graph_id)
                 if job is None:
-                    raise RuntimeError("ARQ did not enqueue the session job")
+                    raise RuntimeError("ARQ did not enqueue the graph job")
             except Exception:
                 logger.exception(
-                    f"Failed to enqueue session {session_id}; "
+                    f"Failed to enqueue graph {graph_id}; "
                     "rolling back its claim"
                 )
                 await repo.rollback_claim(
-                    session_id,
+                    graph_id,
                     state_ids,
                     transition_ids,
                 )
@@ -57,8 +57,8 @@ async def cron_poll_unlabeled_data(ctx: dict) -> None:
 
             queued += 1
             logger.info(
-                f"Enqueued session {session_id} with {len(state_ids)} "
+                f"Enqueued graph {graph_id} with {len(state_ids)} "
                 f"states and {len(transition_ids)} transitions"
             )
 
-    logger.info(f"Cron poll complete; queued {queued} sessions")
+    logger.info(f"Cron poll complete; queued {queued} graphs")

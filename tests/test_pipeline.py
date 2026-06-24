@@ -9,9 +9,9 @@ from src.models.graph import (
     LabeledTransition,
 )
 from src.models.queries import (
-    CLAIM_UNLABELED_SESSIONS,
-    GET_QUEUED_SESSION_STATES,
-    GET_QUEUED_SESSION_TRANSITIONS,
+    CLAIM_UNLABELED_GRAPHS,
+    GET_QUEUED_GRAPH_STATES,
+    GET_QUEUED_GRAPH_TRANSITIONS,
     ROLLBACK_CLAIMED_ITEMS,
     SET_STATE_PENDING,
     SET_TRANSITION_PENDING,
@@ -43,28 +43,28 @@ class Driver:
 
 class QueryInvariantTests(unittest.TestCase):
     def test_claim_only_accepts_null_or_pending_and_sets_queued(self):
-        self.assertIn("labeling_status IS NULL", CLAIM_UNLABELED_SESSIONS)
-        self.assertIn("labeling_status = 'PENDING'", CLAIM_UNLABELED_SESSIONS)
-        self.assertIn("THEN 'QUEUED'", CLAIM_UNLABELED_SESSIONS)
-        self.assertIn("THEN $claim_id", CLAIM_UNLABELED_SESSIONS)
+        self.assertIn("labeling_status IS NULL", CLAIM_UNLABELED_GRAPHS)
+        self.assertIn("labeling_status = 'PENDING'", CLAIM_UNLABELED_GRAPHS)
+        self.assertIn("THEN 'QUEUED'", CLAIM_UNLABELED_GRAPHS)
+        self.assertIn("THEN $claim_id", CLAIM_UNLABELED_GRAPHS)
         self.assertGreaterEqual(
-            CLAIM_UNLABELED_SESSIONS.count(
+            CLAIM_UNLABELED_GRAPHS.count(
                 "labeling_claim_id = $claim_id"
             ),
             2,
         )
-        self.assertNotIn("9220808", CLAIM_UNLABELED_SESSIONS)
+        self.assertNotIn("9220808", CLAIM_UNLABELED_GRAPHS)
         self.assertIn(
             "state.labeling_status = CASE",
-            CLAIM_UNLABELED_SESSIONS,
+            CLAIM_UNLABELED_GRAPHS,
         )
-        self.assertNotIn("COMPLETED", CLAIM_UNLABELED_SESSIONS)
+        self.assertNotIn("COMPLETED", CLAIM_UNLABELED_GRAPHS)
 
-    def test_fetches_are_queued_and_session_scoped(self):
-        self.assertIn("labeling_status = 'QUEUED'", GET_QUEUED_SESSION_STATES)
+    def test_fetches_are_queued_and_graph_scoped(self):
+        self.assertIn("labeling_status = 'QUEUED'", GET_QUEUED_GRAPH_STATES)
         self.assertGreaterEqual(
-            GET_QUEUED_SESSION_TRANSITIONS.count(
-                "{session_id: $session_id}"
+            GET_QUEUED_GRAPH_TRANSITIONS.count(
+                "{graph_id: $graph_id}"
             ),
             2,
         )
@@ -76,12 +76,12 @@ class QueryInvariantTests(unittest.TestCase):
     def test_state_rollback_uses_only_element_id_and_queued_status(self):
         self.assertIn("elementId(s) = $id", SET_STATE_PENDING)
         self.assertIn("labeling_status = 'QUEUED'", SET_STATE_PENDING)
-        self.assertNotIn("$session_id", SET_STATE_PENDING)
+        self.assertNotIn("$graph_id", SET_STATE_PENDING)
 
     def test_transition_rollback_uses_only_element_id_and_queued_status(self):
         self.assertIn("elementId(t) = $id", SET_TRANSITION_PENDING)
         self.assertIn("labeling_status = 'QUEUED'", SET_TRANSITION_PENDING)
-        self.assertNotIn("$session_id", SET_TRANSITION_PENDING)
+        self.assertNotIn("$graph_id", SET_TRANSITION_PENDING)
 
     def test_claim_rollback_uses_exact_id_lists(self):
         self.assertIn("$state_ids", ROLLBACK_CLAIMED_ITEMS)
@@ -168,7 +168,7 @@ class TransitionLabelingTests(unittest.IsolatedAsyncioTestCase):
 class GraphTaskTests(unittest.IsolatedAsyncioTestCase):
     async def test_graph_task_isolates_item_failures(self):
         graph = CrawlerGraph(
-            session_id="session",
+            graph_id="graph-1",
             states={
                 "good": CrawlerState(id="good", url="/good", html=""),
                 "bad": CrawlerState(id="bad", url="/bad", html=""),
@@ -224,9 +224,10 @@ class GraphTaskTests(unittest.IsolatedAsyncioTestCase):
                 new=AsyncMock(return_value=transition_label),
             ),
         ):
-            result = await task_label_graph({}, "session")
+            result = await task_label_graph({}, "graph-1")
 
         self.assertEqual(result["status"], "partial_failure")
+        self.assertEqual(result["graph_id"], "graph-1")
         self.assertEqual(result["completed_states"], 1)
         self.assertEqual(result["completed_transitions"], 1)
         repo.set_state_pending.assert_awaited_once_with("bad")
@@ -239,7 +240,7 @@ class PollerTests(unittest.IsolatedAsyncioTestCase):
         result.data = AsyncMock(
             return_value=[
                 {
-                    "id": "session",
+                    "id": "graph-1",
                     "state_ids": ["s1"],
                     "transition_ids": ["t1"],
                 }
@@ -262,7 +263,7 @@ class PollerTests(unittest.IsolatedAsyncioTestCase):
             await cron_poll_unlabeled_data({"redis": redis})
 
         repo.rollback_claim.assert_awaited_once_with(
-            "session",
+            "graph-1",
             ["s1"],
             ["t1"],
         )

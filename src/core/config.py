@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     )
 
     # Constants
-    max_sessions_per_poll: int = 5
+    max_graphs_per_poll: int = 5
     context_distance_threshold: float = 0.40
     bdd_retry_delay_seconds: int = 30
     bdd_max_retries: int = 5
@@ -35,6 +35,7 @@ class Settings(BaseSettings):
     video_default_fps: int = 30
     video_action_speed: float = 1.0
     video_random_seed: int = 42
+    video_window_scale: float = 0.86
     ffmpeg_path: str | None = None
     scenario_report_max_retries: int = 1
     manual_report_max_retries: int = 1

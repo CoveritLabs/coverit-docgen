@@ -17,7 +17,7 @@ from src.models.bdd import (
 )
 from src.models.queries import (
     CLAIM_BDD_FLOW_LABELING,
-    CLAIM_BDD_SESSION_LABELING,
+    CLAIM_BDD_GRAPH_LABELING,
     GET_BDD_FLOW_LABELING_STATUS,
     GET_BDD_LABELING_STATUS,
     GET_BDD_OUTGOING_LOCATORS,
@@ -74,16 +74,16 @@ def transition(db_id, transition_id, name, from_state, to_state):
 
 
 class BddQueryTests(unittest.TestCase):
-    def test_preflight_and_claim_are_session_scoped(self):
+    def test_preflight_and_claim_are_graph_scoped(self):
         self.assertGreaterEqual(
             GET_BDD_LABELING_STATUS.count(
-                "{session_id: $session_id}"
+                "{graph_id: $graph_id}"
             ),
             3,
         )
-        self.assertIn("labeling_status IS NULL", CLAIM_BDD_SESSION_LABELING)
-        self.assertIn("labeling_claim_id = $claim_id", CLAIM_BDD_SESSION_LABELING)
-        self.assertIn("labeling_status = 'QUEUED'", CLAIM_BDD_SESSION_LABELING)
+        self.assertIn("labeling_status IS NULL", CLAIM_BDD_GRAPH_LABELING)
+        self.assertIn("labeling_claim_id = $claim_id", CLAIM_BDD_GRAPH_LABELING)
+        self.assertIn("labeling_status = 'QUEUED'", CLAIM_BDD_GRAPH_LABELING)
 
     def test_flow_preflight_and_claim_are_requested_flow_scoped(self):
         self.assertIn("UNWIND $flows AS flow", GET_BDD_FLOW_LABELING_STATUS)
@@ -94,7 +94,7 @@ class BddQueryTests(unittest.TestCase):
         self.assertIn("flow.transition_ids", CLAIM_BDD_FLOW_LABELING)
         self.assertIn("labeling_claim_id = $claim_id", CLAIM_BDD_FLOW_LABELING)
 
-    def test_resolution_preserves_input_order_and_session(self):
+    def test_resolution_preserves_input_order_and_graph(self):
         self.assertIn("flow.flow_index", RESOLVE_BDD_FLOWS)
         self.assertIn("transition_index", RESOLVE_BDD_FLOWS)
         self.assertIn("ORDER BY flow_index, transition_index", RESOLVE_BDD_FLOWS)
@@ -102,7 +102,7 @@ class BddQueryTests(unittest.TestCase):
         self.assertIn("from.html AS from_html", RESOLVE_BDD_FLOWS)
         self.assertIn("to.html AS to_html", RESOLVE_BDD_FLOWS)
         self.assertGreaterEqual(
-            RESOLVE_BDD_FLOWS.count("session_id: $session_id"),
+            RESOLVE_BDD_FLOWS.count("graph_id: $graph_id"),
             4,
         )
         self.assertIn("$state_hashes", GET_BDD_OUTGOING_LOCATORS)
@@ -612,7 +612,7 @@ class BddRepositoryTests(unittest.IsolatedAsyncioTestCase):
 
         with self.assertRaisesRegex(ValueError, "does not continue"):
             await BddRepository(session).resolve_flows(
-                "session",
+                "graph-1",
                 [
                     BddFlowInput(
                         checkpoint_hash="start",
@@ -652,7 +652,7 @@ class BddTaskTests(unittest.IsolatedAsyncioTestCase):
                 await task_generate_bdd(
                     {"redis": redis, "job_try": 1},
                     {
-                        "session_id": "session",
+                        "graph_id": "graph-1",
                         "flows": [
                             {
                                 "checkpoint_hash": "start",
@@ -664,10 +664,10 @@ class BddTaskTests(unittest.IsolatedAsyncioTestCase):
 
         redis.enqueue_job.assert_awaited_once_with(
             "task_label_graph",
-            "session",
+            "graph-1",
         )
         repo.claim_unlabeled.assert_awaited_once()
-        self.assertEqual(repo.claim_unlabeled.await_args.args[0], "session")
+        self.assertEqual(repo.claim_unlabeled.await_args.args[0], "graph-1")
         self.assertEqual(
             repo.claim_unlabeled.await_args.args[2],
             repo.get_labeling_status.await_args.args[1],
@@ -699,25 +699,27 @@ class BddTaskTests(unittest.IsolatedAsyncioTestCase):
             patch("src.tasks.bdd.neo_manager.driver", Driver(Mock())),
             patch("src.tasks.bdd.BddRepository", return_value=repo),
         ):
-            with self.assertRaisesRegex(RuntimeError, "down"):
-                await task_generate_bdd(
-                    {"redis": redis, "job_try": 1},
-                    {
-                        "session_id": "session",
-                        "flows": [
-                            {
-                                "checkpoint_hash": "start",
-                                "transition_ids": ["go"],
-                            }
-                        ],
-                    },
-                )
+            result = await task_generate_bdd(
+                {"redis": redis, "job_try": 1},
+                {
+                    "graph_id": "graph-1",
+                    "flows": [
+                        {
+                            "checkpoint_hash": "start",
+                            "transition_ids": ["go"],
+                        }
+                    ],
+                },
+            )
 
         repo.rollback_claim.assert_awaited_once_with(
-            "session",
+            "graph-1",
             ["s1"],
             [],
         )
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["graph_id"], "graph-1")
+        self.assertEqual(result["lastError"], "down")
 
     async def test_success_payload_contains_features_and_bullmq_job(self):
         home = state("s1", "home", "Shopping Home Page")
@@ -754,7 +756,6 @@ class BddTaskTests(unittest.IsolatedAsyncioTestCase):
             result = await task_generate_bdd(
                 {"redis": redis, "job_try": 1},
                 {
-                    "session_id": "session",
                     "graph_id": "graph-1",
                     "flow_ids": ["flow-top"],
                     "regression_codebase_id": "codebase-1",
@@ -773,7 +774,7 @@ class BddTaskTests(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertEqual(len(result["features"]), 1)
-        self.assertEqual(result["session_id"], "session")
+        self.assertEqual(result["graph_id"], "graph-1")
         self.assertEqual(result["feature_name"], "Shopping User Flows")
         self.assertIn("feature_text", result)
         self.assertIn("# Flow ID: flow-1", result["feature_text"])
@@ -797,10 +798,65 @@ class BddTaskTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(repo.resolve_flows.await_args.args[0], "graph-1")
         repo.get_outgoing_locators.assert_awaited_once()
         self.assertEqual(repo.get_outgoing_locators.await_args.args[0], "graph-1")
-        self.assertEqual(enqueue.await_args.args[3]["session_id"], "session")
+        self.assertEqual(enqueue.await_args.args[3]["graph_id"], "graph-1")
         self.assertEqual(enqueue.await_args.args[3]["flow_ids"], ["flow-top", "flow-1"])
         self.assertEqual(enqueue.await_args.args[3]["regression_codebase_id"], "codebase-1")
         self.assertFalse(Path("src/session.feature").exists())
+
+    async def test_artifact_save_failure_does_not_enqueue_bullmq_job(self):
+        home = state("s1", "home", "Shopping Home Page")
+        cart = state("s2", "cart", "Shopping Cart Page")
+        flow = ResolvedFlow(
+            flow_id="flow-1",
+            checkpoint=home,
+            transitions=[
+                transition("t1", "open-cart", "Open Shopping Cart", home, cart)
+            ],
+        )
+        repo = Mock()
+        repo.get_labeling_status = AsyncMock(
+            return_value={
+                "state_count": 2,
+                "transition_count": 1,
+                "pending_states": 0,
+                "pending_transitions": 0,
+                "queued_states": 0,
+                "queued_transitions": 0,
+                "invalid_states": 0,
+                "invalid_transitions": 0,
+            }
+        )
+        repo.resolve_flows = AsyncMock(return_value=[flow])
+        repo.get_outgoing_locators = AsyncMock(return_value={"home": ["#cart"]})
+        redis = Mock()
+
+        with (
+            patch("src.tasks.bdd.neo_manager.driver", Driver(Mock())),
+            patch("src.tasks.bdd.BddRepository", return_value=repo),
+            patch(
+                "src.tasks.bdd.save_result_payload",
+                side_effect=RuntimeError("disk down"),
+            ),
+            patch("src.tasks.bdd._enqueue_bullmq_job", new=AsyncMock()) as enqueue,
+        ):
+            result = await task_generate_bdd(
+                {"redis": redis, "job_try": 1},
+                {
+                    "graph_id": "graph-1",
+                    "flows": [
+                        {
+                            "flow_id": "flow-1",
+                            "checkpoint_hash": "home",
+                            "transition_ids": ["open-cart"],
+                        }
+                    ],
+                },
+            )
+
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["graph_id"], "graph-1")
+        self.assertEqual(result["lastError"], "disk down")
+        enqueue.assert_not_awaited()
 
 
 class LoggingStyleTests(unittest.TestCase):

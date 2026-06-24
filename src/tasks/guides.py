@@ -19,20 +19,20 @@ async def task_generate_user_guide(ctx: dict, payload: dict) -> dict:
 
     try:
         request = UserGuideInput.model_validate(payload)
-        session_id = request.session_id
+        graph_id = request.graph_id
         job_try = int(ctx.get("job_try", 1))
 
         async with neo_manager.driver.session() as session:
             bdd_repo = BddRepository(session)
-            status = await bdd_repo.get_labeling_status(session_id)
+            status = await bdd_repo.get_labeling_status(graph_id)
 
             if status["state_count"] == 0:
-                raise ValueError(f"Session {session_id} contains no states")
+                raise ValueError(f"Graph {graph_id} contains no states")
 
             invalid = status["invalid_states"] + status["invalid_transitions"]
             if invalid:
                 raise ValueError(
-                    f"Session {session_id} contains {invalid} invalid labeling statuses"
+                    f"Graph {graph_id} contains {invalid} invalid labeling statuses"
                 )
 
             pending = status["pending_states"] + status["pending_transitions"]
@@ -40,7 +40,7 @@ async def task_generate_user_guide(ctx: dict, payload: dict) -> dict:
 
             if pending or queued:
                 logger.info(
-                    f"[Guide:{session_id}] Incomplete labeling detected. "
+                    f"[Guide:{graph_id}] Incomplete labeling detected. "
                     f"States (Pending: {status['pending_states']}, "
                     f"Queued: {status['queued_states']}) | "
                     f"Transitions (Pending: {status['pending_transitions']}, "
@@ -49,12 +49,12 @@ async def task_generate_user_guide(ctx: dict, payload: dict) -> dict:
 
                 if job_try >= settings.bdd_max_retries:
                     raise RuntimeError(
-                        f"Labeling did not complete for session {session_id} "
+                        f"Labeling did not complete for graph {graph_id} "
                         f"after {job_try} attempts"
                     )
 
                 if pending:
-                    claim = await bdd_repo.claim_unlabeled(session_id, uuid.uuid4().hex)
+                    claim = await bdd_repo.claim_unlabeled(graph_id, uuid.uuid4().hex)
                     state_ids = claim.get("state_ids") or []
                     transition_ids = claim.get("transition_ids") or []
 
@@ -62,23 +62,23 @@ async def task_generate_user_guide(ctx: dict, payload: dict) -> dict:
                         try:
                             job = await ctx["redis"].enqueue_job(
                                 "task_label_graph",
-                                session_id,
+                                graph_id,
                             )
                             if job is None:
                                 raise RuntimeError(
                                     "ARQ did not enqueue the labeling job"
                                 )
                         except Exception:
-                            logger.error(f"Labeling session {session_id} failed")
+                            logger.error(f"Labeling graph {graph_id} failed")
                             await bdd_repo.rollback_claim(
-                                session_id,
+                                graph_id,
                                 state_ids,
                                 transition_ids,
                             )
                             raise
 
                 logger.info(
-                    f"[Guide:{session_id}] Waiting for labeling completion "
+                    f"[Guide:{graph_id}] Waiting for labeling completion "
                     f"on attempt {job_try}"
                 )
 
@@ -86,7 +86,7 @@ async def task_generate_user_guide(ctx: dict, payload: dict) -> dict:
                 raise Retry(defer=settings.bdd_retry_delay_seconds)
 
             path = await GuideRepository(session).resolve_shortest_path(
-                session_id,
+                graph_id,
                 request.start_state_hash,
                 request.end_state_hash,
             )
@@ -94,7 +94,7 @@ async def task_generate_user_guide(ctx: dict, payload: dict) -> dict:
         guide = format_user_guide(path)
         
         logger.info(
-            f"[Guide:{session_id}] Generated user guide with "
+            f"[Guide:{graph_id}] Generated user guide with "
             f"{len(path.transitions)} steps"
         )
 

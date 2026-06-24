@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field
 
 
 class UserGuideInput(BaseModel):
-    session_id: str = Field(min_length=1)
+    graph_id: str = Field(min_length=1)
     start_state_hash: str = Field(min_length=1)
     end_state_hash: str = Field(min_length=1)
 

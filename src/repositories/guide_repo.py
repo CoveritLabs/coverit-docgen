@@ -16,27 +16,27 @@ class GuideRepository:
 
     async def resolve_shortest_path(
         self,
-        session_id: str,
+        graph_id: str,
         start_hash: str,
         end_hash: str,
     ) -> ResolvedGuidePath:
         result = await self.session.run(
             RESOLVE_SHORTEST_GUIDE_PATH,
-            session_id=session_id,
+            graph_id=graph_id,
             start_state_hash=start_hash,
             end_state_hash=end_hash,
         )
         record = await result.single()
         if record is None:
-            raise ValueError(f"Session {session_id} was not found")
+            raise ValueError(f"Graph {graph_id} was not found")
 
         if record.get("start_db_id") is None:
             raise ValueError(
-                f"Start state {start_hash} was not found in session {session_id}"
+                f"Start state {start_hash} was not found in graph {graph_id}"
             )
         if record.get("end_db_id") is None:
             raise ValueError(
-                f"End state {end_hash} was not found in session {session_id}"
+                f"End state {end_hash} was not found in graph {graph_id}"
             )
 
         states_data = record.get("states") or []
@@ -44,7 +44,7 @@ class GuideRepository:
         if not states_data:
             raise ValueError(
                 f"No path exists from state {start_hash} to {end_hash} "
-                f"in session {session_id}"
+                f"in graph {graph_id}"
             )
 
         states = [self._state_from_mapping(state) for state in states_data]

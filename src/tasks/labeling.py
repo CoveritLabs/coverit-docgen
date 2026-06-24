@@ -53,14 +53,14 @@ async def task_label_transition_by_id(ctx: dict, transition_id: str) -> dict:
     return {"status": "success", "transition_id": transition_id}
 
 
-async def task_label_graph(ctx: dict, session_id: str) -> dict:
-    """Label queued records in a session with per-item failure isolation.
+async def task_label_graph(ctx: dict, graph_id: str) -> dict:
+    """Label queued records in a graph with per-item failure isolation.
 
     Each successful item is saved immediately as ``COMPLETED``. An exception
     returns only the affected item to ``PENDING`` and processing continues with
-    the remainder of the session.
+    the remainder of the graph.
     """
-    logger.info(f"[Graph:{session_id}] Starting incremental graph labeling")
+    logger.info(f"[Graph:{graph_id}] Starting incremental graph labeling")
     completed_states = 0
     completed_transitions = 0
     failed_states: list[str] = []
@@ -68,9 +68,9 @@ async def task_label_graph(ctx: dict, session_id: str) -> dict:
 
     async with neo_manager.driver.session() as session:
         repo = LabelingRepository(session)
-        graph = await repo.get_graph(session_id)
+        graph = await repo.get_graph(graph_id)
         if graph is None:
-            return {"status": "empty", "graph_session_id": session_id}
+            return {"status": "empty", "graph_id": graph_id}
 
         for state_id, state in graph.states.items():
             if state_id in graph.skip_states:
@@ -103,13 +103,13 @@ async def task_label_graph(ctx: dict, session_id: str) -> dict:
         status = "partial_failure"
 
     logger.info(
-        f"[Graph:{session_id}] Finished: {completed_states} states, "
+        f"[Graph:{graph_id}] Finished: {completed_states} states, "
         f"{completed_transitions} transitions, "
         f"{len(failed_states) + len(failed_transitions)} failures"
     )
     return {
         "status": status,
-        "graph_session_id": session_id,
+        "graph_id": graph_id,
         "completed_states": completed_states,
         "completed_transitions": completed_transitions,
         "failed_state_ids": failed_states,
