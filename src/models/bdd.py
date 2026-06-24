@@ -12,10 +12,54 @@ class StepType(str, Enum):
     ACTION_HOOK = "ACTION_HOOK"
 
 
+class FlowEditorStepKind(str, Enum):
+    DESIGN_CLASS = "design-class"
+    DESIGN_OPERATION = "design-operation"
+    ASSERTION = "assertion"
+    ACTION_HOOK = "action-hook"
+    GROUP = "group"
+
+
+class FlowEditorPositionEdge(str, Enum):
+    BEFORE = "before"
+    AFTER = "after"
+
+
+class FlowEditorPosition(BaseModel):
+    edge: FlowEditorPositionEdge
+    transitionId: str = Field(min_length=1)
+
+
+class FlowEditorElementRef(BaseModel):
+    selector: str | None = None
+    selectorCandidates: list[str] = Field(default_factory=list)
+    tag: str | None = None
+    text: str | None = None
+    accessibleName: str | None = None
+    attributes: dict[str, str] = Field(default_factory=dict)
+    pageUrl: str | None = None
+    stateHash: str | None = None
+    box: dict[str, Any] | None = None
+    viewport: dict[str, Any] | None = None
+
+
+class FlowEditorDraftStep(BaseModel):
+    id: str = Field(min_length=1)
+    kind: FlowEditorStepKind
+    position: FlowEditorPosition
+    order: int = 0
+    label: str = ""
+    element: FlowEditorElementRef | None = None
+    definition: dict[str, Any] = Field(default_factory=dict)
+    createdAt: str | None = None
+    updatedAt: str | None = None
+
+
 class BddFlowInput(BaseModel):
     flow_id: str | None = None
     checkpoint_hash: str = Field(min_length=1)
     transition_ids: list[str] = Field(min_length=1)
+    editor_steps: list[FlowEditorDraftStep] = Field(default_factory=list)
 
     @field_validator("transition_ids")
     @classmethod
@@ -194,5 +238,7 @@ class CompiledBdd:
     states: dict[str, dict]
     transitions: dict[str, dict]
     assertions: dict[str, dict]
+    action_hooks: dict[str, dict]
+    design_class: dict[str, Any] | None = None
     feature_name: str | None = None
     feature_text: str | None = None
