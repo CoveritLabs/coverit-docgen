@@ -1,3 +1,4 @@
+import json
 from enum import Enum
 from typing import Any
 from dataclasses import dataclass
@@ -32,6 +33,94 @@ class BddGenerationInput(BaseModel):
     codegen_config: dict[str, Any] | None = None
 
 
+class BddTransitionAction(BaseModel):
+    selector: str = Field(min_length=1)
+    action_type: str = ""
+    value: str | None = None
+
+    @field_validator("selector")
+    @classmethod
+    def validate_selector(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("selector cannot be empty")
+        return value
+
+    @field_validator("action_type")
+    @classmethod
+    def normalize_action_type(cls, value: str) -> str:
+        action_type = str(value or "").strip().lower()
+        if action_type == "type":
+            return "fill"
+        return action_type
+
+
+def parse_bdd_action_values(
+    raw_action_value: Any,
+    fallback_selector: str,
+    fallback_action_type: str,
+) -> list[BddTransitionAction]:
+    """Normalize crawler action metadata into executable BDD actions."""
+
+    if isinstance(raw_action_value, str):
+        raw_action_value = json.loads(raw_action_value) if raw_action_value.strip() else []
+
+    if raw_action_value is None:
+        raw_action_value = []
+
+    if not isinstance(raw_action_value, list):
+        raise ValueError("action_value must be a list")
+
+    actions: list[BddTransitionAction] = []
+    for item in raw_action_value:
+        if not isinstance(item, dict):
+            raise ValueError("action_value entries must be objects")
+
+        raw_action_type = _first_string(item, "t", "action_type", "type")
+        raw_value = (
+            item.get("v")
+            if item.get("v") is not None
+            else item.get("value")
+            if item.get("value") is not None
+            else item.get("url")
+        )
+        selector = _first_string(item, "s", "selector", "locator", "locatorKey")
+        if not selector and raw_action_type.lower() == "navigate" and raw_value:
+            selector = str(raw_value).strip()
+        if not selector:
+            continue
+
+        actions.append(
+            BddTransitionAction(
+                selector=selector,
+                action_type=raw_action_type,
+                value=None if raw_value is None else str(raw_value),
+            )
+        )
+
+    if actions:
+        return actions
+
+    fallback_selector = str(fallback_selector or "").strip()
+    if fallback_selector:
+        return [
+            BddTransitionAction(
+                selector=fallback_selector,
+                action_type=fallback_action_type or "",
+            )
+        ]
+
+    return []
+
+
+def _first_string(item: dict[str, Any], *keys: str) -> str:
+    for key in keys:
+        value = item.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
 class ResolvedState(BaseModel):
     db_id: str
     state_hash: str
@@ -49,6 +138,7 @@ class ResolvedTransition(BaseModel):
     action: str = ""
     action_type: str = ""
     locator_value: str
+    actions: list[BddTransitionAction] = Field(default_factory=list)
     labeling_status: str
     from_state: ResolvedState
     to_state: ResolvedState

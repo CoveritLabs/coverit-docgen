@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, Mock, patch
 from arq import Retry
 
 from src.models.bdd import (
+    BddTransitionAction,
     BddFlowInput,
     FeaturePlan,
     ResolvedFlow,
@@ -73,6 +74,44 @@ def transition(db_id, transition_id, name, from_state, to_state):
     )
 
 
+def resolved_row(**overrides):
+    row = {
+        "flow_index": 0,
+        "transition_index": 0,
+        "checkpoint_db_id": "s1",
+        "checkpoint_hash": "start",
+        "checkpoint_name": "Start Page",
+        "checkpoint_description": "",
+        "checkpoint_url": "/",
+        "checkpoint_html": "<h1>Start</h1>",
+        "checkpoint_status": "COMPLETED",
+        "transition_db_id": "t1",
+        "transition_id": "go",
+        "transition_name": "Go",
+        "transition_action": "Click Go",
+        "action_type": "click",
+        "locator_value": "#go",
+        "action_value": "",
+        "transition_status": "COMPLETED",
+        "from_db_id": "s1",
+        "from_hash": "start",
+        "from_name": "Start Page",
+        "from_description": "",
+        "from_url": "/",
+        "from_html": "<h1>Start</h1>",
+        "from_status": "COMPLETED",
+        "to_db_id": "s2",
+        "to_hash": "end",
+        "to_name": "End Page",
+        "to_description": "",
+        "to_url": "/end",
+        "to_html": "<h1>End</h1>",
+        "to_status": "COMPLETED",
+    }
+    row.update(overrides)
+    return row
+
+
 class BddQueryTests(unittest.TestCase):
     def test_preflight_and_claim_are_graph_scoped(self):
         self.assertGreaterEqual(
@@ -101,6 +140,7 @@ class BddQueryTests(unittest.TestCase):
         self.assertIn("checkpoint.html AS checkpoint_html", RESOLVE_BDD_FLOWS)
         self.assertIn("from.html AS from_html", RESOLVE_BDD_FLOWS)
         self.assertIn("to.html AS to_html", RESOLVE_BDD_FLOWS)
+        self.assertIn("transition.action_value AS action_value", RESOLVE_BDD_FLOWS)
         self.assertGreaterEqual(
             RESOLVE_BDD_FLOWS.count("graph_id: $graph_id"),
             4,
@@ -141,11 +181,110 @@ class BddCompilerTests(unittest.TestCase):
             compiled.states["S_SHOPPING_HOME_PAGE"]["dom"]["elements"],
             {"#open-cart": {"cssSelector": "#open-cart"}},
         )
+        transition_mapping = compiled.transitions["T_OPEN_SHOPPING_CART"]
+        self.assertNotIn("action", transition_mapping)
         self.assertEqual(
-            compiled.transitions["T_OPEN_SHOPPING_CART"]["action"]["stateId"],
-            "S_SHOPPING_HOME_PAGE",
+            transition_mapping["actions"],
+            [
+                {
+                    "type": "click",
+                    "stateId": "S_SHOPPING_HOME_PAGE",
+                    "locatorKey": "#open-cart",
+                }
+            ],
         )
         self.assertEqual(compiled.assertions, {})
+
+    def test_compiles_multistep_transition_actions_and_locators(self):
+        login = state("s1", "login", "Login Page")
+        dashboard = state("s2", "dashboard", "Dashboard Page")
+        submit_login = ResolvedTransition(
+            db_id="t1",
+            transition_id="login",
+            name="Login",
+            action='Fill "Email" then Click "Sign in"',
+            action_type="click",
+            locator_value="#submit",
+            actions=[
+                BddTransitionAction(
+                    selector="#email",
+                    action_type="type",
+                    value="user@example.com",
+                ),
+                BddTransitionAction(selector="#submit", action_type="click"),
+            ],
+            labeling_status="COMPLETED",
+            from_state=login,
+            to_state=dashboard,
+        )
+
+        compiled = compile_bdd(
+            [ResolvedFlow(checkpoint=login, transitions=[submit_login])],
+            {"login": []},
+        )
+
+        transition_mapping = compiled.transitions["T_LOGIN"]
+        self.assertEqual(
+            transition_mapping["actions"],
+            [
+                {
+                    "type": "fill",
+                    "stateId": "S_LOGIN_PAGE",
+                    "locatorKey": "#email",
+                    "value": "user@example.com",
+                },
+                {
+                    "type": "click",
+                    "stateId": "S_LOGIN_PAGE",
+                    "locatorKey": "#submit",
+                },
+            ],
+        )
+        self.assertEqual(
+            compiled.states["S_LOGIN_PAGE"]["dom"]["elements"],
+            {
+                "#email": {"cssSelector": "#email"},
+                "#submit": {"cssSelector": "#submit"},
+            },
+        )
+
+    def test_compiles_navigate_action_with_url(self):
+        home = state("s1", "home", "Home Page")
+        account = state("s2", "account", "Account Page")
+        open_account = ResolvedTransition(
+            db_id="t1",
+            transition_id="open-account",
+            name="Open Account",
+            action="Navigate to account",
+            action_type="navigate",
+            locator_value="https://shop.example.com/account",
+            actions=[
+                BddTransitionAction(
+                    selector="https://shop.example.com/account",
+                    action_type="navigate",
+                    value="https://shop.example.com/account",
+                )
+            ],
+            labeling_status="COMPLETED",
+            from_state=home,
+            to_state=account,
+        )
+
+        compiled = compile_bdd(
+            [ResolvedFlow(checkpoint=home, transitions=[open_account])],
+            {"home": []},
+        )
+
+        action = compiled.transitions["T_OPEN_ACCOUNT"]["actions"][0]
+        self.assertEqual(
+            action,
+            {
+                "type": "navigate",
+                "stateId": "S_HOME_PAGE",
+                "url": "https://shop.example.com/account",
+            },
+        )
+        self.assertEqual(compiled.states["S_HOME_PAGE"]["dom"]["elements"], {})
 
     def test_compiles_scenario_level_semantic_assertion(self):
         home = state("s1", "home", "Product Page")
@@ -535,6 +674,7 @@ class BddRepositoryTests(unittest.IsolatedAsyncioTestCase):
                     "transition_action": "Click Go",
                     "action_type": "click",
                     "locator_value": "#go",
+                    "action_value": "",
                     "transition_status": "COMPLETED",
                     "from_db_id": "s1",
                     "from_hash": "start",
@@ -568,6 +708,36 @@ class BddRepositoryTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(flows[0].flow_id, "flow-1")
+        self.assertEqual(flows[0].transitions[0].actions[0].selector, "#go")
+        self.assertEqual(flows[0].transitions[0].actions[0].action_type, "click")
+
+    async def test_resolved_transition_parses_multistep_action_value(self):
+        result = Mock()
+        result.data = AsyncMock(
+            return_value=[
+                resolved_row(
+                    transition_id="login",
+                    transition_name="Login",
+                    transition_action='Fill "Email" then Click "Sign in"',
+                    action_value=(
+                        '[{"s":"#email","t":"type","v":"user@example.com"},'
+                        '{"s":"#submit","t":"click","d":"Click Sign in"}]'
+                    ),
+                )
+            ]
+        )
+        session = Mock()
+        session.run = AsyncMock(return_value=result)
+
+        flows = await BddRepository(session).resolve_flows(
+            "graph-1",
+            [BddFlowInput(checkpoint_hash="start", transition_ids=["login"])],
+        )
+
+        actions = flows[0].transitions[0].actions
+        self.assertEqual([action.selector for action in actions], ["#email", "#submit"])
+        self.assertEqual([action.action_type for action in actions], ["fill", "click"])
+        self.assertEqual(actions[0].value, "user@example.com")
 
     async def test_disconnected_flow_is_rejected(self):
         result = Mock()
@@ -757,6 +927,7 @@ class BddTaskTests(unittest.IsolatedAsyncioTestCase):
                 {"redis": redis, "job_try": 1},
                 {
                     "graph_id": "graph-1",
+                    "session_id": "session-1",
                     "flow_ids": ["flow-top"],
                     "regression_codebase_id": "codebase-1",
                     "codegen_config": {
@@ -843,6 +1014,7 @@ class BddTaskTests(unittest.IsolatedAsyncioTestCase):
                 {"redis": redis, "job_try": 1},
                 {
                     "graph_id": "graph-1",
+                    "session_id": "session-1",
                     "flows": [
                         {
                             "flow_id": "flow-1",

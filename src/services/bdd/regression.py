@@ -2,6 +2,7 @@ from collections import Counter, defaultdict
 from urllib.parse import urlparse
 from src.utils.helpers import words, title, upper_snake, pascal, slug, url_area, jaccard
 from src.models.bdd import (
+    BddTransitionAction,
     CompiledFeature,
     CompiledBdd,
     FeaturePlan,
@@ -68,6 +69,63 @@ def _assign_ids(entities, prefix: str) -> dict[str, str]:
 def _class_name(identifier: str, prefix: str, suffix: str) -> str:
     stem = identifier.removeprefix(f"{prefix}_")
     return f"{pascal(stem)}{suffix}"
+
+
+def _effective_transition_actions(
+    transition: ResolvedTransition,
+) -> list[BddTransitionAction]:
+    if transition.actions:
+        return transition.actions
+    if transition.locator_value.strip():
+        return [
+            BddTransitionAction(
+                selector=transition.locator_value,
+                action_type=transition.action_type,
+            )
+        ]
+    return []
+
+
+def _transition_action_mapping(
+    action: BddTransitionAction,
+    state_id: str,
+) -> dict[str, str]:
+    mapping = {
+        "type": action.action_type,
+        "stateId": state_id,
+    }
+    if action.action_type == "navigate":
+        mapping["url"] = action.value or action.selector
+        return mapping
+
+    mapping["locatorKey"] = action.selector
+    if action.action_type in {"fill", "select"} and action.value is not None:
+        mapping["value"] = action.value
+    return mapping
+
+
+def _action_locators_by_state_hash(
+    transitions: list[ResolvedTransition],
+) -> dict[str, list[str]]:
+    locators: dict[str, list[str]] = defaultdict(list)
+    for transition in transitions:
+        for action in _effective_transition_actions(transition):
+            if action.action_type == "navigate":
+                continue
+            state_hash = transition.from_state.state_hash
+            if action.selector not in locators[state_hash]:
+                locators[state_hash].append(action.selector)
+    return locators
+
+
+def _unique_locators(*groups: list[str]) -> list[str]:
+    locators: list[str] = []
+    for group in groups:
+        for locator in group:
+            locator = str(locator or "").strip()
+            if locator and locator not in locators:
+                locators.append(locator)
+    return locators
 
 
 def _flow_labels(flow: ResolvedFlow) -> list[str]:
@@ -349,6 +407,7 @@ def compile_bdd(
     states, transitions = _unique_entities(flows)
     state_ids = _assign_ids(states, "S")
     transition_ids = _assign_ids(transitions, "T")
+    action_locators = _action_locators_by_state_hash(transitions)
     flow_to_index = {id(flow): index for index, flow in enumerate(flows)}
     semantic_assertions_by_flow_index = semantic_assertions_by_flow_index or {}
     flow_groups = _feature_groups(
@@ -386,7 +445,10 @@ def compile_bdd(
     state_mappings: dict[str, dict] = {}
     for state in states:
         state_id = state_ids[state.db_id]
-        locators = outgoing_locators.get(state.state_hash, [])
+        locators = _unique_locators(
+            outgoing_locators.get(state.state_hash, []),
+            action_locators.get(state.state_hash, []),
+        )
         state_mappings[state_id] = {
             "id": state_id,
             "dbId": state.db_id,
@@ -404,6 +466,7 @@ def compile_bdd(
     transition_mappings: dict[str, dict] = {}
     for transition in transitions:
         transition_id = transition_ids[transition.db_id]
+        source_state_id = state_ids[transition.from_state.db_id]
         transition_mappings[transition_id] = {
             "id": transition_id,
             "dbId": transition.db_id,
@@ -415,11 +478,10 @@ def compile_bdd(
                 "T",
                 "Transition",
             ),
-            "action": {
-                "type": transition.action_type,
-                "stateId": state_ids[transition.from_state.db_id],
-                "locatorKey": transition.locator_value,
-            },
+            "actions": [
+                _transition_action_mapping(action, source_state_id)
+                for action in _effective_transition_actions(transition)
+            ],
         }
 
     assertion_mappings = _assertion_mappings(

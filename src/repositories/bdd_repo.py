@@ -5,6 +5,7 @@ from src.models.bdd import (
     ResolvedFlow,
     ResolvedState,
     ResolvedTransition,
+    parse_bdd_action_values,
 )
 from src.models.queries import (
     CLAIM_BDD_FLOW_LABELING,
@@ -148,6 +149,11 @@ class BddRepository:
                         action=row["transition_action"] or "",
                         action_type=row["action_type"] or "",
                         locator_value=row["locator_value"] or "",
+                        actions=parse_bdd_action_values(
+                            row.get("action_value"),
+                            row["locator_value"] or "",
+                            row["action_type"] or "",
+                        ),
                         labeling_status=row["transition_status"] or "",
                         from_state=from_state,
                         to_state=to_state,
