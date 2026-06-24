@@ -52,14 +52,18 @@ async def startup(ctx: dict) -> None:
     await playwright_manager.start()
     logger.info("Worker initialized external connections")
     payload = {
-        "graph_id": "a02caae1-ac52-4458-ac64-61272cbf74df",
+        "graph_id": "38e62f81-0d53-4faa-93a2-94af3c3290de",
         "flows": [
             {
-                "checkpoint_hash": "b4e52123b8c2da1abf6b18c23e94b4f39e4e1ed1a73f199917612c574e7772b0",
+                "checkpoint_hash": "45e3bf1699fbc67091c51c0fe3293580d128f63b77e67df217c368dd9dd99dad",
                 "transition_ids": [
-                    "4e802e0fd4d2a1fe4b74438d9e15444facf2cbd954be46106c1d19725d9f3765",
-                    "1eff2d62c4839b4d8768f7872f5075ac59badb669fd9932b7c1da0dee117e280",
-                    "6aba9a0e0f9f636fff2268bdff7af09282a5b992b374877b3821d2c07c72e7ed",
+                    "9e5fd44ed9ba279d7dcc07befc5ca4ee1a6f80f20ecbc256af10d6fea7d23539",
+                    "7c6b718d7f501d88af2833f3f6073e183eeb7deec3ffc6d8f4b9ac1002330e21",
+                    "51e3993c1d8f2240bdc3a19e1a252bfca06c6f9f34f3a552942f7891cf1ee165",
+                    "dd1c32ae7966158c9db7c79ed08c9ea70580d1bdd38da1e67245949d8e53d22c",
+                    "6581f43c6e97734930e8115305644959d1b4546b7bec35bebcbfee9de57b3578",
+                    "f5c1e8a6d4be6bef582660223c28641c12ba9137cbf20040749be03b46454ac7",
+                    "12354539e457d269a5734f088c75fbdc9dd1b893725b765a089e797673a03275"
                 ],
             }
         ],

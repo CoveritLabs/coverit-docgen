@@ -1,17 +1,21 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from io import BytesIO
 from pathlib import Path
+from typing import Iterable
 
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from src.core.playwright import playwright_manager
 from src.services.video.config import VideoRenderConfig
-from src.services.video.cursor import load_cursor_image
+from src.services.video.cursor import CursorKind, load_cursor_image
 from src.services.video.effects import (
     Point,
     Rect,
     WindowParams,
     curved_cursor_path,
+    ease_in_out_cubic,
+    focused_window_transform,
+    lerp_rect,
     screen_point_for_cursor,
     window_transform_for_progress,
 )
@@ -23,6 +27,9 @@ from src.services.video.typing import typing_frames
 class CapturedScene:
     image: object
     target: Rect
+    document_target: Rect
+    scroll: Point
+    cursor_kind: CursorKind
 
 
 @dataclass(frozen=True)
@@ -31,23 +38,63 @@ class RenderOutput:
     duration_seconds: float
 
 
-class BrowserFrameRenderer:
-    """Renders browser interactions as a sequence of PNG frames.
+class FrameSink:
+    """Streams rendered frames to disk while preserving the output contract."""
 
-    The renderer presents the captured page as a small floating
-    "window" (with rounded corners and a soft drop shadow) centred on
-    a solid background, exactly like the reference video.  For each
-    shot the window smoothly zooms in to focus on the target element,
-    the cursor glides along a curved path to that element, the action
-    is performed, the window holds for a moment, and then smoothly
-    zooms back out to the resting windowed state.  All motion uses
-    higher-order easing (smootherstep / cubic-bezier) so transitions
-    feel buttery instead of mechanical.
-    """
+    def __init__(self, frame_dir: Path, fps: int):
+        self.frame_dir = frame_dir
+        self.fps = fps
+        self.frame_paths: list[Path] = []
+        self.elapsed_frames = 0
+
+    def write(self, frames: Iterable[object]) -> None:
+        for frame in frames:
+            self.write_frame(frame)
+
+    def write_frame(self, frame) -> None:
+        self.elapsed_frames += 1
+        path = self.frame_dir / f"frame_{self.elapsed_frames:05d}.png"
+        frame.save(path)
+        self.frame_paths.append(path)
+
+    @property
+    def duration_seconds(self) -> float:
+        return self.elapsed_frames / self.fps
+
+
+class BrowserFrameRenderer:
+    """Renders browser interactions as a sequence of PNG frames."""
+
+    _TEXT_INPUT_TYPES = {
+        "",
+        "email",
+        "number",
+        "password",
+        "search",
+        "tel",
+        "text",
+        "url",
+    }
+    _HAND_INPUT_TYPES = {"button", "checkbox", "radio", "reset", "submit"}
+    _HAND_ROLES = {
+        "button",
+        "checkbox",
+        "link",
+        "menuitem",
+        "option",
+        "radio",
+        "switch",
+        "tab",
+    }
 
     def __init__(self, config: VideoRenderConfig):
         self.config = config
-        self.cursor_image, self.cursor_hotspot = load_cursor_image()
+        self.cursor_assets = {
+            "default": load_cursor_image("default"),
+            "hand": load_cursor_image("hand"),
+            "text": load_cursor_image("text"),
+        }
+        self.cursor_image, self.cursor_hotspot = self.cursor_assets["default"]
         self._window_params = self._build_window_params()
 
     async def render(
@@ -58,13 +105,8 @@ class BrowserFrameRenderer:
         if playwright_manager._browser is None:
             raise RuntimeError("Playwright browser not started. Call start() first.")
 
-        from PIL import Image
-
         frame_dir.mkdir(parents=True, exist_ok=True)
-        frame_paths: list[Path] = []
-        # Cursor lives in *screenshot* coordinates (page space).
-        previous_cursor = Point(self.config.width * 0.12, self.config.height * 0.85)
-        elapsed_frames = 0
+        sink = FrameSink(frame_dir, self.config.fps)
 
         for timeline in timelines:
             if not timeline.start_url.strip():
@@ -84,103 +126,140 @@ class BrowserFrameRenderer:
                         f"Unable to open video flow start URL {timeline.start_url!r}"
                     ) from exc
 
+                previous_cursor = Point(
+                    self.config.width * 0.12,
+                    self.config.height * 0.85,
+                )
+                previous_cursor_kind: CursorKind = "default"
+                pending_scene: CapturedScene | None = None
+                already_focused = False
+
                 for shot_index, shot in enumerate(timeline.shots):
-                    scene = await self._capture_scene(page, shot)
+                    scene = pending_scene or await self._capture_scene(page, shot)
+                    pending_scene = None
                     target_center = scene.target.center
 
-                    shot_frames: list[Image.Image] = []
-
-                    # 1. Rest intro -- window sits at rest, cursor visible.
-                    shot_frames.extend(
-                        self._rest_frames(
-                            scene.image,
-                            scene.target,
-                            previous_cursor,
-                            intro=True,
+                    if already_focused:
+                        already_focused = False
+                    else:
+                        sink.write(
+                            self._rest_frames(
+                                scene.image,
+                                scene.target,
+                                previous_cursor,
+                                previous_cursor_kind,
+                            )
                         )
-                    )
-
-                    # 2. Zoom in -- window grows from rest to focused on target.
-                    shot_frames.extend(
-                        self._zoom_frames(
-                            scene.image,
-                            scene.target,
-                            previous_cursor,
-                            zoom_in=True,
+                        sink.write(
+                            self._zoom_frames(
+                                scene.image,
+                                scene.target,
+                                previous_cursor,
+                                previous_cursor_kind,
+                                zoom_in=True,
+                            )
                         )
-                    )
-
-                    # 3. Cursor move -- cursor glides from previous to target.
-                    shot_frames.extend(
-                        self._cursor_frames(
-                            scene.image,
-                            scene.target,
-                            previous_cursor,
-                            target_center,
+                        sink.write(
+                            self._cursor_frames(
+                                scene.image,
+                                scene.target,
+                                previous_cursor,
+                                target_center,
+                                previous_cursor_kind,
+                                scene.cursor_kind,
+                            )
                         )
-                    )
 
-                    # 4. Action -- typing or click, plus optional hold.
                     if shot.has_typing:
-                        action_frames = await self._perform_typing_action(
-                            page,
-                            shot,
-                            scene.target,
-                            target_center,
-                            shot_index,
+                        sink.write(
+                            await self._perform_typing_action(
+                                page,
+                                shot,
+                                scene.target,
+                                target_center,
+                                scene.cursor_kind,
+                                shot_index,
+                            )
                         )
-                        shot_frames.extend(action_frames)
                         release_image = await self._capture_page(page)
                     else:
                         await self._perform_non_typing_action(page, shot)
                         release_image = await self._capture_page(page)
-                        # Small "press" feedback frames using the release image.
-                        shot_frames.extend(
+                        sink.write(
                             self._press_frames(
                                 release_image,
                                 scene.target,
                                 target_center,
+                                scene.cursor_kind,
                             )
                         )
 
-                    # 5. Brief hold at full zoom after the action settles.
-                    shot_frames.extend(
-                        self._hold_frames(release_image, scene.target, target_center)
-                    )
-
-                    # 6. Zoom out -- window shrinks back to the resting state.
-                    shot_frames.extend(
-                        self._zoom_frames(
+                    release_scene = replace(scene, image=release_image)
+                    sink.write(
+                        self._hold_frames(
                             release_image,
                             scene.target,
                             target_center,
-                            zoom_in=False,
+                            scene.cursor_kind,
                         )
                     )
 
-                    # 7. Rest outro -- window at rest before next shot.
-                    shot_frames.extend(
-                        self._rest_frames(
-                            release_image,
-                            scene.target,
-                            target_center,
-                            intro=False,
+                    next_scene = None
+                    if shot_index + 1 < len(timeline.shots):
+                        next_scene = await self._capture_scene(
+                            page,
+                            timeline.shots[shot_index + 1],
                         )
-                    )
 
-                    for frame in shot_frames:
-                        elapsed_frames += 1
-                        path = frame_dir / f"frame_{elapsed_frames:05d}.png"
-                        frame.save(path)
-                        frame_paths.append(path)
-
-                    previous_cursor = target_center
+                    if next_scene and self._should_stick_to_next(
+                        release_scene,
+                        next_scene,
+                    ):
+                        sink.write(
+                            self._focus_pan_frames(
+                                release_scene,
+                                next_scene,
+                                target_center,
+                                next_scene.target.center,
+                            )
+                        )
+                        pending_scene = next_scene
+                        previous_cursor = next_scene.target.center
+                        previous_cursor_kind = next_scene.cursor_kind
+                        already_focused = True
+                    else:
+                        sink.write(
+                            self._zoom_frames(
+                                release_image,
+                                scene.target,
+                                target_center,
+                                scene.cursor_kind,
+                                zoom_in=False,
+                            )
+                        )
+                        sink.write(
+                            self._rest_frames(
+                                release_image,
+                                scene.target,
+                                target_center,
+                                scene.cursor_kind,
+                            )
+                        )
+                        if next_scene:
+                            pending_scene = next_scene
+                            previous_cursor = self._document_point_in_scene(
+                                release_scene.document_target.center,
+                                next_scene,
+                            )
+                        else:
+                            previous_cursor = target_center
+                        previous_cursor_kind = scene.cursor_kind
             finally:
                 await page.close()
 
         return RenderOutput(
-            frame_paths=frame_paths,
-            duration_seconds=elapsed_frames / self.config.fps,
+            frame_paths=sink.frame_paths,
+            duration_seconds=sink.duration_seconds,
         )
 
     # ------------------------------------------------------------------
@@ -199,11 +278,25 @@ class BrowserFrameRenderer:
             )
 
         await locator.scroll_into_view_if_needed(timeout=5000)
+        scroll = await self._page_scroll(page)
         box = await locator.bounding_box()
         if box is None:
             raise ValueError(f"Selector {shot.selector!r} has no visible bounding box")
+
         target = self._box_from_js(box, shot.selector)
-        return CapturedScene(image=await self._capture_page(page), target=target)
+        document_target = Rect(
+            target.x + scroll.x,
+            target.y + scroll.y,
+            target.width,
+            target.height,
+        )
+        return CapturedScene(
+            image=await self._capture_page(page),
+            target=target,
+            document_target=document_target,
+            scroll=scroll,
+            cursor_kind=await self._cursor_kind_for(locator, shot),
+        )
 
     async def _capture_page(self, page):
         from PIL import Image
@@ -212,12 +305,94 @@ class BrowserFrameRenderer:
             "RGB"
         )
 
+    async def _page_scroll(self, page) -> Point:
+        evaluate = getattr(page, "evaluate", None)
+        if evaluate is None:
+            return Point(0.0, 0.0)
+
+        try:
+            value = await evaluate(
+                """() => ({
+                    x: window.scrollX || window.pageXOffset || 0,
+                    y: window.scrollY || window.pageYOffset || 0
+                })"""
+            )
+        except Exception:
+            return Point(0.0, 0.0)
+
+        if not isinstance(value, dict):
+            return Point(0.0, 0.0)
+        return Point(float(value.get("x") or 0.0), float(value.get("y") or 0.0))
+
+    async def _cursor_kind_for(self, locator, shot: VideoShot) -> CursorKind:
+        if shot.has_typing:
+            return "text"
+
+        evaluate = getattr(locator, "evaluate", None)
+        if evaluate is None:
+            return "default"
+
+        try:
+            metadata = await evaluate(
+                """element => {
+                    const style = window.getComputedStyle(element);
+                    return {
+                        tagName: element.tagName,
+                        type: element.getAttribute("type") || "",
+                        role: element.getAttribute("role") || "",
+                        href: element.getAttribute("href") || "",
+                        cursor: style.cursor || "",
+                        contentEditable: element.isContentEditable
+                    };
+                }"""
+            )
+        except Exception:
+            return "default"
+
+        return self._cursor_kind_from_metadata(metadata)
+
+    def _cursor_kind_from_metadata(self, metadata) -> CursorKind:
+        if not isinstance(metadata, dict):
+            return "default"
+
+        tag = str(metadata.get("tagName") or metadata.get("tag") or "").lower()
+        input_type = str(metadata.get("type") or "").lower()
+        role = str(metadata.get("role") or "").lower()
+        css_cursor = str(metadata.get("cursor") or "").lower()
+        href = str(metadata.get("href") or "")
+        content_editable = metadata.get("contentEditable") in {
+            True,
+            "true",
+            "plaintext-only",
+        }
+
+        if (
+            css_cursor == "text"
+            or content_editable
+            or role == "textbox"
+            or tag == "textarea"
+            or (tag == "input" and input_type in self._TEXT_INPUT_TYPES)
+        ):
+            return "text"
+
+        if (
+            css_cursor == "pointer"
+            or role in self._HAND_ROLES
+            or tag in {"button", "select", "summary"}
+            or (tag == "a" and href)
+            or (tag == "input" and input_type in self._HAND_INPUT_TYPES)
+        ):
+            return "hand"
+
+        return "default"
+
     async def _perform_typing_action(
         self,
         page,
         shot: VideoShot,
         target: Rect,
         cursor: Point,
+        cursor_kind: CursorKind,
         shot_index: int,
     ):
         frames = []
@@ -246,6 +421,7 @@ class BrowserFrameRenderer:
                 cursor,
                 zoom_progress=1.0,
                 caret_visible=typed_frame.caret_visible,
+                cursor_kind=cursor_kind,
             )
             repeats = max(1, self._scaled_frame_count(0.08))
             frames.extend([frame.copy() for _ in range(repeats)])
@@ -276,54 +452,128 @@ class BrowserFrameRenderer:
         speed = max(0.1, self.config.action_speed)
         return max(1, int(self.config.fps * seconds / speed))
 
-    def _rest_frames(self, image, target: Rect, cursor: Point, intro: bool):
-        """Static "rest" frames: window fully zoomed-out, cursor still."""
+    def _rest_frames(
+        self,
+        image,
+        target: Rect,
+        cursor: Point,
+        cursor_kind: CursorKind,
+    ):
         count = self._scaled_frame_count(self.config.phase_rest_intro)
-        frames = []
-        for _ in range(count):
-            frames.append(self._compose_frame(image, target, cursor, zoom_progress=0.0))
-        return frames
+        return [
+            self._compose_frame(
+                image,
+                target,
+                cursor,
+                zoom_progress=0.0,
+                cursor_kind=cursor_kind,
+            )
+            for _ in range(count)
+        ]
 
-    def _zoom_frames(self, image, target: Rect, cursor: Point, zoom_in: bool):
-        """Zoom in (or out) between the rest state and the focused state."""
+    def _zoom_frames(
+        self,
+        image,
+        target: Rect,
+        cursor: Point,
+        cursor_kind: CursorKind,
+        zoom_in: bool,
+    ):
         count = self._scaled_frame_count(
             self.config.phase_zoom_in if zoom_in else self.config.phase_zoom_out
         )
         frames = []
         for index in range(count):
             fraction = (index + 1) / count
-            # Easing is applied inside ``window_transform_for_progress``
-            # via smootherstep; we just feed it a linear fraction.
             progress = fraction if zoom_in else 1.0 - fraction
             frames.append(
-                self._compose_frame(image, target, cursor, zoom_progress=progress)
+                self._compose_frame(
+                    image,
+                    target,
+                    cursor,
+                    zoom_progress=progress,
+                    cursor_kind=cursor_kind,
+                )
             )
         return frames
 
-    def _cursor_frames(self, image, target: Rect, start: Point, end: Point):
+    def _cursor_frames(
+        self,
+        image,
+        target: Rect,
+        start: Point,
+        end: Point,
+        start_cursor_kind: CursorKind,
+        end_cursor_kind: CursorKind,
+    ):
         count = self._scaled_frame_count(self.config.phase_cursor_move)
         frames = []
         for index in range(count):
             fraction = (index + 1) / count
             cursor = curved_cursor_path(start, end, fraction)
+            cursor_kind = end_cursor_kind if fraction > 0.82 else start_cursor_kind
             frames.append(
                 self._compose_frame(
                     image,
                     target,
                     cursor,
                     zoom_progress=1.0,
+                    cursor_kind=cursor_kind,
                 )
             )
         return frames
 
-    def _press_frames(self, image, target: Rect, cursor: Point):
-        """Brief visual "click press" feedback: the cursor scales down
-        for a couple of frames, then back up.  Subtle enough that it
-        reads as tactile feedback rather than a flashy effect."""
-        count = max(2, self.config.click_press_frames)
+    def _focus_pan_frames(
+        self,
+        start_scene: CapturedScene,
+        end_scene: CapturedScene,
+        start_cursor: Point,
+        end_cursor: Point,
+    ):
+        from PIL import Image
+
+        count = self._scaled_frame_count(self.config.phase_focus_pan)
         frames = []
         for index in range(count):
-            press = 1.0 - 0.18 * (1.0 - abs(index - count / 2.0) / (count / 2.0))
+            fraction = (index + 1) / count
+            eased = ease_in_out_cubic(fraction)
+            blended = Image.blend(
+                start_scene.image.convert("RGB"),
+                end_scene.image.convert("RGB"),
+                eased,
+            )
+            target = lerp_rect(start_scene.target, end_scene.target, eased)
+            cursor = curved_cursor_path(start_cursor, end_cursor, fraction)
+            cursor_kind = (
+                end_scene.cursor_kind
+                if fraction > 0.82
+                else start_scene.cursor_kind
+            )
+            frames.append(
+                self._compose_frame(
+                    blended,
+                    target,
+                    cursor,
+                    zoom_progress=1.0,
+                    cursor_kind=cursor_kind,
+                )
+            )
+        return frames
+
+    def _press_frames(
+        self,
+        image,
+        target: Rect,
+        cursor: Point,
+        cursor_kind: CursorKind,
+    ):
+        count = max(3, self.config.click_press_frames)
+        minimum = max(0.1, min(1.0, self.config.click_press_scale_min))
+        frames = []
+        for index in range(count):
+            fraction = index / (count - 1)
+            depth = 1.0 - abs(fraction * 2.0 - 1.0)
+            press = 1.0 - (1.0 - minimum) * depth
             frames.append(
                 self._compose_frame(
                     image,
@@ -331,16 +581,66 @@ class BrowserFrameRenderer:
                     cursor,
                     zoom_progress=1.0,
                     cursor_press=press,
+                    cursor_kind=cursor_kind,
                 )
             )
         return frames
 
-    def _hold_frames(self, image, target: Rect, cursor: Point):
+    def _hold_frames(
+        self,
+        image,
+        target: Rect,
+        cursor: Point,
+        cursor_kind: CursorKind,
+    ):
         count = self._scaled_frame_count(self.config.phase_action_hold)
-        frames = []
-        for _ in range(count):
-            frames.append(self._compose_frame(image, target, cursor, zoom_progress=1.0))
-        return frames
+        return [
+            self._compose_frame(
+                image,
+                target,
+                cursor,
+                zoom_progress=1.0,
+                cursor_kind=cursor_kind,
+            )
+            for _ in range(count)
+        ]
+
+    # ------------------------------------------------------------------
+    # Sticky camera helpers
+    # ------------------------------------------------------------------
+    def _should_stick_to_next(
+        self,
+        current_scene: CapturedScene,
+        next_scene: CapturedScene,
+    ) -> bool:
+        if not self.config.camera_sticky_enabled:
+            return False
+
+        current = current_scene.document_target.center
+        next_target = next_scene.document_target.center
+        dx = next_target.x - current.x
+        dy = next_target.y - current.y
+        distance = (dx * dx + dy * dy) ** 0.5
+        if distance > self.config.camera_sticky_max_distance_px:
+            return False
+
+        focused_crop, _ = focused_window_transform(
+            self._window_params,
+            current_scene.target,
+        )
+        max_dx = focused_crop.width * self.config.camera_sticky_max_axis_ratio
+        max_dy = focused_crop.height * self.config.camera_sticky_max_axis_ratio
+        return abs(dx) <= max_dx and abs(dy) <= max_dy
+
+    def _document_point_in_scene(
+        self,
+        document_point: Point,
+        scene: CapturedScene,
+    ) -> Point:
+        return Point(
+            document_point.x - scene.scroll.x,
+            document_point.y - scene.scroll.y,
+        )
 
     # ------------------------------------------------------------------
     # Composition
@@ -361,10 +661,6 @@ class BrowserFrameRenderer:
 
     def _build_window_params(self) -> WindowParams:
         cfg = self.config
-        # Rest card size: same proportions as the reference video
-        # (about 72% of the frame's smaller dimension, preserving the
-        # page aspect ratio so the captured screenshot is never
-        # squished).
         page_aspect = cfg.width / cfg.height
         rest_height = cfg.height * cfg.window_scale
         rest_width = rest_height * page_aspect
@@ -392,39 +688,23 @@ class BrowserFrameRenderer:
         zoom_progress: float,
         caret_visible: bool = False,
         cursor_press: float = 1.0,
+        cursor_kind: CursorKind = "default",
     ):
-        """Render a single output frame.
-
-        The captured ``image`` (full-page screenshot at viewport size)
-        is placed onto the output frame according to ``zoom_progress``
-        (0.0 = window at rest, 1.0 = focused on target).  The ``cursor``
-        is expressed in *screenshot* coordinates and is mapped onto the
-        output frame using the current window transform -- this keeps
-        the cursor visually "attached" to its UI element during the
-        zoom.  When the window is visible (zoomed out), a rounded
-        corner mask and soft drop shadow are applied so the page reads
-        as a floating card; when fully zoomed in, those decorations
-        fall outside the frame and are skipped.
-        """
-        from PIL import Image, ImageFilter, ImageDraw
+        from PIL import Image
 
         params = self._window_params
         transform = window_transform_for_progress(params, target, zoom_progress)
 
-        # Background -- solid colour, identical to the reference video.
         frame = Image.new(
             "RGB", (params.frame_width, params.frame_height), params.background_color
         )
 
-        # Crop the visible region of the screenshot and resize it to
-        # the on-screen rectangle dictated by the transform.
         crop_box = (
             int(round(transform.crop.x)),
             int(round(transform.crop.y)),
             int(round(transform.crop.x + transform.crop.width)),
             int(round(transform.crop.y + transform.crop.height)),
         )
-        # Clamp to image bounds to avoid PIL errors at the edges.
         crop_box = (
             max(0, crop_box[0]),
             max(0, crop_box[1]),
@@ -440,13 +720,10 @@ class BrowserFrameRenderer:
         screen_x = int(round(transform.screen.x))
         screen_y = int(round(transform.screen.y))
 
-        # Only bother with rounded corners + shadow when the card is
-        # actually smaller than the frame (i.e. visible as a window).
         visibility = transform.visibility
         if visibility > 0.02 and (
             screen_w < params.frame_width - 2 or screen_h < params.frame_height - 2
         ):
-            # 1. Draw the shadow on its own RGBA layer, then composite.
             shadow_layer = self._build_shadow_layer(
                 screen_x,
                 screen_y,
@@ -460,7 +737,6 @@ class BrowserFrameRenderer:
                 frame_rgba = Image.alpha_composite(frame_rgba, shadow_layer)
                 frame = frame_rgba.convert("RGB")
 
-            # 2. Round the corners of the cropped card and paste it.
             mask = self._rounded_mask(
                 screen_w,
                 screen_h,
@@ -471,26 +747,22 @@ class BrowserFrameRenderer:
             rounded.putalpha(mask)
             frame.paste(rounded, (screen_x, screen_y), rounded)
         else:
-            # Fully zoomed in -- just paste the (already-resized)
-            # crop directly.  No shadow, no rounded corners visible.
             frame.paste(cropped, (screen_x, screen_y))
 
-        # Cursor -- drawn on top in screen coordinates.
         cursor_screen = screen_point_for_cursor(cursor, transform, params)
         cursor_layer = Image.new("RGBA", frame.size, (0, 0, 0, 0))
-        cursor_img = self.cursor_image
+        cursor_img, hotspot = self._cursor_asset(cursor_kind)
         if cursor_press != 1.0:
-            scale = max(0.7, cursor_press)
+            scale = max(0.1, min(1.0, cursor_press))
             new_size = (
                 max(1, int(cursor_img.width * scale)),
                 max(1, int(cursor_img.height * scale)),
             )
             cursor_img = cursor_img.resize(new_size, Image.Resampling.LANCZOS)
-            # Keep the hotspot proportional so the tip stays put.
-            hot_x = int(self.cursor_hotspot[0] * scale)
-            hot_y = int(self.cursor_hotspot[1] * scale)
+            hot_x = int(hotspot[0] * scale)
+            hot_y = int(hotspot[1] * scale)
         else:
-            hot_x, hot_y = self.cursor_hotspot
+            hot_x, hot_y = hotspot
         cursor_layer.alpha_composite(
             cursor_img,
             (
@@ -502,17 +774,19 @@ class BrowserFrameRenderer:
             "RGB"
         )
 
-        # Caret -- drawn on top of the (possibly zoomed-in) target.
-        if caret_visible:
-            self._draw_caret(
-                frame,
-                image,
-                target,
-                transform,
-                params,
-            )
+        # if caret_visible:
+        #     self._draw_caret(
+        #         frame,
+        #         image,
+        #         target,
+        #         transform,
+        #         params,
+        #     )
 
         return frame
+
+    def _cursor_asset(self, cursor_kind: CursorKind):
+        return self.cursor_assets.get(cursor_kind) or self.cursor_assets["default"]
 
     # ------------------------------------------------------------------
     # Visual helpers
@@ -526,10 +800,7 @@ class BrowserFrameRenderer:
         params: WindowParams,
         visibility: float,
     ):
-        """Render the drop shadow (with a softer ambient halo) for the
-        windowed card.  Returns an RGBA layer the size of the frame,
-        or ``None`` if there is nothing visible to draw."""
-        from PIL import Image, ImageFilter, ImageDraw
+        from PIL import Image, ImageDraw, ImageFilter
 
         if screen_w <= 0 or screen_h <= 0:
             return None
@@ -538,7 +809,6 @@ class BrowserFrameRenderer:
             "RGBA", (params.frame_width, params.frame_height), (0, 0, 0, 0)
         )
 
-        # Primary downward shadow.
         primary = Image.new(
             "RGBA", (params.frame_width, params.frame_height), (0, 0, 0, 0)
         )
@@ -555,7 +825,6 @@ class BrowserFrameRenderer:
         )
         primary = primary.filter(ImageFilter.GaussianBlur(radius=params.shadow_blur))
 
-        # Wider, fainter ambient halo.
         halo = Image.new(
             "RGBA", (params.frame_width, params.frame_height), (0, 0, 0, 0)
         )
@@ -585,14 +854,8 @@ class BrowserFrameRenderer:
         return mask
 
     def _draw_caret(self, frame, source_image, target: Rect, transform, params):
-        """Draw the text caret on top of the (zoomed) target so the
-        user sees the typing cursor blinking.  The caret is positioned
-        relative to the target's right edge in *screenshot* space and
-        mapped to screen space using the current transform."""
         from PIL import ImageDraw
 
-        # Caret x in screenshot coords: just inside the right edge of
-        # the target's text area.  This mirrors the original behaviour.
         caret_x_source = target.x + min(
             target.width - 6,
             max(6, target.width * 0.82),
