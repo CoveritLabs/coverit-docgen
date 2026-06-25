@@ -1,3 +1,4 @@
+import os
 import shutil
 import tempfile
 import unittest
@@ -8,6 +9,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 from arq import Retry
 
+from src.core.config import get_settings
 from src.models.bdd import BddFlowInput
 from src.models.queries import RESOLVE_VIDEO_FLOWS
 from src.models.video import (
@@ -125,12 +127,60 @@ class FakePage:
 
 
 class VideoModelTests(unittest.TestCase):
+    def tearDown(self):
+        get_settings.cache_clear()
+
     def test_internal_config_defaults_are_valid(self):
+        get_settings.cache_clear()
         config = get_video_render_config()
         self.assertEqual(config.width, 1280)
         self.assertEqual(config.height, 720)
         self.assertEqual(config.action_speed, 1.0)
         self.assertEqual(config.window_scale, 0.86)
+        self.assertEqual(config.window_focus_zoom, 1.4)
+        self.assertEqual(config.focus_padding, 18.0)
+        self.assertEqual(config.phase_zoom_in, 0.50)
+        self.assertEqual(config.phase_focus_pan, 0.35)
+        self.assertTrue(config.camera_sticky_enabled)
+        self.assertEqual(config.click_press_scale_min, 0.72)
+
+    def test_env_configures_curated_video_motion_knobs(self):
+        with patch.dict(
+            os.environ,
+            {
+                "VIDEO_FOCUS_ZOOM": "1.25",
+                "VIDEO_FOCUS_PADDING": "24.0",
+                "VIDEO_ZOOM_IN_SECONDS": "0.80",
+                "VIDEO_CURSOR_MOVE_SECONDS": "0.90",
+                "VIDEO_FOCUS_PAN_SECONDS": "0.60",
+                "VIDEO_CLICK_PRESS_SCALE_MIN": "0.61",
+            },
+        ):
+            get_settings.cache_clear()
+            config = get_video_render_config()
+
+        self.assertEqual(config.window_focus_zoom, 1.25)
+        self.assertEqual(config.focus_padding, 24.0)
+        self.assertEqual(config.phase_zoom_in, 0.80)
+        self.assertEqual(config.phase_cursor_move, 0.90)
+        self.assertEqual(config.phase_focus_pan, 0.60)
+        self.assertEqual(config.click_press_scale_min, 0.61)
+
+    def test_env_can_disable_sticky_camera(self):
+        with patch.dict(
+            os.environ,
+            {
+                "VIDEO_STICKY_CAMERA_ENABLED": "False",
+                "VIDEO_STICKY_MAX_DISTANCE_PX": "120",
+                "VIDEO_STICKY_MAX_AXIS_RATIO": "0.25",
+            },
+        ):
+            get_settings.cache_clear()
+            config = get_video_render_config()
+
+        self.assertFalse(config.camera_sticky_enabled)
+        self.assertEqual(config.camera_sticky_max_distance_px, 120.0)
+        self.assertEqual(config.camera_sticky_max_axis_ratio, 0.25)
 
     def test_action_value_normalizes_crawler_shorthand(self):
         actions = parse_video_action_values(
