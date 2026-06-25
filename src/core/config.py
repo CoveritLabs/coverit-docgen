@@ -1,4 +1,5 @@
 from functools import lru_cache
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -35,7 +36,21 @@ class Settings(BaseSettings):
     video_default_fps: int = 30
     video_action_speed: float = 1.0
     video_random_seed: int = 42
-    video_window_scale: float = 0.86
+    video_window_scale: float = Field(default=0.86, gt=0.0, le=1.0)
+    video_focus_zoom: float = Field(default=1.4, ge=1.0, le=2.0)
+    video_focus_padding: float = Field(default=18.0, ge=0.0)
+    video_rest_intro_seconds: float = Field(default=0.20, ge=0.0)
+    video_zoom_in_seconds: float = Field(default=0.50, ge=0.0)
+    video_cursor_move_seconds: float = Field(default=0.55, ge=0.0)
+    video_action_hold_seconds: float = Field(default=0.15, ge=0.0)
+    video_zoom_out_seconds: float = Field(default=0.65, ge=0.0)
+    video_rest_outro_seconds: float = Field(default=0.20, ge=0.0)
+    video_focus_pan_seconds: float = Field(default=0.35, ge=0.0)
+    video_sticky_camera_enabled: bool = True
+    video_sticky_max_distance_px: float = Field(default=520.0, ge=0.0)
+    video_sticky_max_axis_ratio: float = Field(default=0.55, ge=0.0)
+    video_click_press_frames: int = Field(default=5, ge=1)
+    video_click_press_scale_min: float = Field(default=0.72, ge=0.1, le=1.0)
     ffmpeg_path: str | None = None
     scenario_report_max_retries: int = 1
     manual_report_max_retries: int = 1
