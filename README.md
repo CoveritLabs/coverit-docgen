@@ -171,8 +171,10 @@ Runtime requirements:
 
 Rendering notes:
 - The renderer does not use a spotlight/dim mask around target elements.
-- The click pulse animation is intentionally omitted.
+- Click feedback is rendered as a subtle cursor press rather than a target pulse.
 - Higher `VIDEO_ACTION_SPEED` values make transitions faster; lower values make them slower.
+- The `VIDEO_*_SECONDS` values are base phase durations before `VIDEO_ACTION_SPEED` is applied.
+- Video settings are loaded at worker startup; restart the worker/container after changing them.
 Environment defaults:
 - `VIDEO_MAX_RETRIES`
 - `VIDEO_RETRY_DELAY_SECONDS`
@@ -181,15 +183,19 @@ Environment defaults:
 - `VIDEO_DEFAULT_HEIGHT`
 - `VIDEO_DEFAULT_FPS`
 - `VIDEO_ACTION_SPEED`
-- `VIDEO_WINDOW_SCALE`
-- `VIDEO_WINDOW_BACKGROUND_COLOR`
-- `VIDEO_WINDOW_SHADOW_STRENGTH`
-- `VIDEO_WINDOW_BORDER_RADIUS`
-- `VIDEO_PRE_ACTION_HOLD_SECONDS`
-- `VIDEO_ZOOM_SECONDS`
-- `VIDEO_CURSOR_TRAVEL_SECONDS`
-- `VIDEO_ACTION_HOLD_SECONDS`
-- `VIDEO_PAGE_SETTLE_SECONDS`
-- `VIDEO_RELEASE_SECONDS`
-- `VIDEO_TYPING_FRAME_SECONDS`
 - `VIDEO_RANDOM_SEED`
+- `VIDEO_WINDOW_SCALE`
+- `VIDEO_FOCUS_ZOOM`
+- `VIDEO_FOCUS_PADDING`
+- `VIDEO_REST_INTRO_SECONDS`
+- `VIDEO_ZOOM_IN_SECONDS`
+- `VIDEO_CURSOR_MOVE_SECONDS`
+- `VIDEO_ACTION_HOLD_SECONDS`
+- `VIDEO_ZOOM_OUT_SECONDS`
+- `VIDEO_REST_OUTRO_SECONDS`
+- `VIDEO_FOCUS_PAN_SECONDS`
+- `VIDEO_STICKY_CAMERA_ENABLED`
+- `VIDEO_STICKY_MAX_DISTANCE_PX`
+- `VIDEO_STICKY_MAX_AXIS_RATIO`
+- `VIDEO_CLICK_PRESS_FRAMES`
+- `VIDEO_CLICK_PRESS_SCALE_MIN`

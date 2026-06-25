@@ -1,12 +1,15 @@
+import os
 import shutil
 import tempfile
 import unittest
+from dataclasses import replace
 from io import BytesIO
 from pathlib import Path
 from unittest.mock import AsyncMock, Mock, patch
 
 from arq import Retry
 
+from src.core.config import get_settings
 from src.models.bdd import BddFlowInput
 from src.models.queries import RESOLVE_VIDEO_FLOWS
 from src.models.video import (
@@ -23,7 +26,7 @@ from src.services.video.effects import (
     curved_cursor_path,
     ease_out_cubic,
 )
-from src.services.video.renderer import BrowserFrameRenderer
+from src.services.video.renderer import BrowserFrameRenderer, CapturedScene
 from src.services.video.timeline import VideoFlowTimeline, VideoShot, build_timelines
 from src.services.video.typing import typing_frames
 from src.tasks.video import task_generate_video
@@ -56,16 +59,29 @@ class FakeKeyboard:
 
 
 class FakeLocator:
-    def __init__(self):
+    def __init__(
+        self,
+        page=None,
+        box: dict | None = None,
+        metadata: dict | None = None,
+        scroll: tuple[float, float] | None = None,
+    ):
         self.first = self
+        self._page = page
+        self._scroll = scroll
         self.count = AsyncMock(return_value=1)
-        self.scroll_into_view_if_needed = AsyncMock()
+        self.scroll_into_view_if_needed = AsyncMock(side_effect=self._scroll_into_view)
         self.bounding_box = AsyncMock(
-            return_value={"x": 80, "y": 45, "width": 80, "height": 32}
+            return_value=box or {"x": 80, "y": 45, "width": 80, "height": 32}
         )
+        self.evaluate = AsyncMock(return_value=metadata or {})
         self.click = AsyncMock()
         self.fill = AsyncMock()
         self.select_option = AsyncMock()
+
+    async def _scroll_into_view(self, timeout: int = 5000):
+        if self._page is not None and self._scroll is not None:
+            self._page.scroll_x, self._page.scroll_y = self._scroll
 
 
 class FakePage:
@@ -75,10 +91,31 @@ class FakePage:
         self.wait_for_load_state = AsyncMock()
         self.keyboard = FakeKeyboard()
         self._locators: dict[str, FakeLocator] = {}
+        self._locator_configs: dict[str, dict] = {}
+        self.scroll_x = 0.0
+        self.scroll_y = 0.0
+
+    def set_locator(
+        self,
+        selector: str,
+        *,
+        box: dict | None = None,
+        metadata: dict | None = None,
+        scroll: tuple[float, float] | None = None,
+    ) -> None:
+        self._locator_configs[selector] = {
+            "box": box,
+            "metadata": metadata,
+            "scroll": scroll,
+        }
 
     def locator(self, selector: str) -> FakeLocator:
-        self._locators.setdefault(selector, FakeLocator())
+        config = self._locator_configs.get(selector, {})
+        self._locators.setdefault(selector, FakeLocator(page=self, **config))
         return self._locators[selector]
+
+    async def evaluate(self, script: str):
+        return {"x": self.scroll_x, "y": self.scroll_y}
 
     async def screenshot(self, full_page: bool = False):
         from PIL import Image
@@ -90,12 +127,60 @@ class FakePage:
 
 
 class VideoModelTests(unittest.TestCase):
+    def tearDown(self):
+        get_settings.cache_clear()
+
     def test_internal_config_defaults_are_valid(self):
+        get_settings.cache_clear()
         config = get_video_render_config()
         self.assertEqual(config.width, 1280)
         self.assertEqual(config.height, 720)
         self.assertEqual(config.action_speed, 1.0)
         self.assertEqual(config.window_scale, 0.86)
+        self.assertEqual(config.window_focus_zoom, 1.4)
+        self.assertEqual(config.focus_padding, 18.0)
+        self.assertEqual(config.phase_zoom_in, 0.50)
+        self.assertEqual(config.phase_focus_pan, 0.35)
+        self.assertTrue(config.camera_sticky_enabled)
+        self.assertEqual(config.click_press_scale_min, 0.72)
+
+    def test_env_configures_curated_video_motion_knobs(self):
+        with patch.dict(
+            os.environ,
+            {
+                "VIDEO_FOCUS_ZOOM": "1.25",
+                "VIDEO_FOCUS_PADDING": "24.0",
+                "VIDEO_ZOOM_IN_SECONDS": "0.80",
+                "VIDEO_CURSOR_MOVE_SECONDS": "0.90",
+                "VIDEO_FOCUS_PAN_SECONDS": "0.60",
+                "VIDEO_CLICK_PRESS_SCALE_MIN": "0.61",
+            },
+        ):
+            get_settings.cache_clear()
+            config = get_video_render_config()
+
+        self.assertEqual(config.window_focus_zoom, 1.25)
+        self.assertEqual(config.focus_padding, 24.0)
+        self.assertEqual(config.phase_zoom_in, 0.80)
+        self.assertEqual(config.phase_cursor_move, 0.90)
+        self.assertEqual(config.phase_focus_pan, 0.60)
+        self.assertEqual(config.click_press_scale_min, 0.61)
+
+    def test_env_can_disable_sticky_camera(self):
+        with patch.dict(
+            os.environ,
+            {
+                "VIDEO_STICKY_CAMERA_ENABLED": "False",
+                "VIDEO_STICKY_MAX_DISTANCE_PX": "120",
+                "VIDEO_STICKY_MAX_AXIS_RATIO": "0.25",
+            },
+        ):
+            get_settings.cache_clear()
+            config = get_video_render_config()
+
+        self.assertFalse(config.camera_sticky_enabled)
+        self.assertEqual(config.camera_sticky_max_distance_px, 120.0)
+        self.assertEqual(config.camera_sticky_max_axis_ratio, 0.25)
 
     def test_action_value_normalizes_crawler_shorthand(self):
         actions = parse_video_action_values(
@@ -132,6 +217,48 @@ class VideoEffectTests(unittest.TestCase):
         self.assertGreaterEqual(camera.crop_y, 0)
         self.assertLessEqual(camera.crop_x + camera.crop_width, 1280)
         self.assertLessEqual(camera.crop_y + camera.crop_height, 720)
+
+    def test_sticky_camera_uses_document_coordinates_for_scrolled_targets(self):
+        renderer = BrowserFrameRenderer(
+            VideoRenderConfig(width=1280, height=720, fps=30, action_speed=1, random_seed=1)
+        )
+        current = CapturedScene(
+            image=None,
+            target=Rect(120, 650, 80, 32),
+            document_target=Rect(120, 650, 80, 32),
+            scroll=Point(0, 0),
+            cursor_kind="default",
+        )
+        next_scene = CapturedScene(
+            image=None,
+            target=Rect(120, 80, 80, 32),
+            document_target=Rect(120, 690, 80, 32),
+            scroll=Point(0, 610),
+            cursor_kind="default",
+        )
+
+        self.assertTrue(renderer._should_stick_to_next(current, next_scene))
+
+    def test_sticky_camera_rejects_far_document_targets(self):
+        renderer = BrowserFrameRenderer(
+            VideoRenderConfig(width=1280, height=720, fps=30, action_speed=1, random_seed=1)
+        )
+        current = CapturedScene(
+            image=None,
+            target=Rect(120, 100, 80, 32),
+            document_target=Rect(120, 100, 80, 32),
+            scroll=Point(0, 0),
+            cursor_kind="default",
+        )
+        next_scene = CapturedScene(
+            image=None,
+            target=Rect(120, 120, 80, 32),
+            document_target=Rect(120, 900, 80, 32),
+            scroll=Point(0, 780),
+            cursor_kind="default",
+        )
+
+        self.assertFalse(renderer._should_stick_to_next(current, next_scene))
 
 
 class VideoTypingTests(unittest.TestCase):
@@ -215,6 +342,143 @@ class VideoTimelineTests(unittest.TestCase):
 
 
 class VideoRendererTests(unittest.IsolatedAsyncioTestCase):
+    def test_cursor_kind_from_element_metadata(self):
+        renderer = BrowserFrameRenderer(
+            VideoRenderConfig(width=320, height=180, fps=10, action_speed=1, random_seed=1)
+        )
+
+        self.assertEqual(
+            renderer._cursor_kind_from_metadata({"tagName": "input", "type": "email"}),
+            "text",
+        )
+        self.assertEqual(
+            renderer._cursor_kind_from_metadata({"tagName": "textarea"}),
+            "text",
+        )
+        self.assertEqual(
+            renderer._cursor_kind_from_metadata({"role": "textbox"}),
+            "text",
+        )
+        self.assertEqual(
+            renderer._cursor_kind_from_metadata({"tagName": "button"}),
+            "hand",
+        )
+        self.assertEqual(
+            renderer._cursor_kind_from_metadata({"tagName": "a", "href": "/home"}),
+            "hand",
+        )
+        self.assertEqual(
+            renderer._cursor_kind_from_metadata({"tagName": "div", "cursor": "pointer"}),
+            "hand",
+        )
+        self.assertEqual(
+            renderer._cursor_kind_from_metadata({"tagName": "div"}),
+            "default",
+        )
+
+    async def test_capture_scene_records_scroll_adjusted_document_box(self):
+        page = FakePage()
+        page.set_locator(
+            "#below",
+            box={"x": 70, "y": 40, "width": 80, "height": 30},
+            scroll=(0, 300),
+        )
+        renderer = BrowserFrameRenderer(
+            VideoRenderConfig(width=320, height=180, fps=10, action_speed=1, random_seed=1)
+        )
+
+        scene = await renderer._capture_scene(
+            page,
+            VideoShot("below", "#below", "click", None),
+        )
+
+        self.assertEqual(scene.scroll.y, 300)
+        self.assertEqual(scene.document_target.y, 340)
+
+    async def test_nearby_targets_skip_zoom_cycle_when_sticky(self):
+        async def render_count(config: VideoRenderConfig) -> int:
+            page = FakePage()
+            page.set_locator(
+                "#first",
+                box={"x": 80, "y": 45, "width": 80, "height": 32},
+                metadata={"tagName": "button"},
+            )
+            page.set_locator(
+                "#second",
+                box={"x": 118, "y": 50, "width": 80, "height": 32},
+                metadata={"tagName": "button"},
+            )
+            browser = Mock()
+            browser.new_page = AsyncMock(return_value=page)
+            timeline = VideoFlowTimeline(
+                start_url="https://example.test/start",
+                shots=[
+                    VideoShot("first", "#first", "click", None),
+                    VideoShot("second", "#second", "click", None),
+                ],
+            )
+
+            from PIL import Image
+
+            with tempfile.TemporaryDirectory() as temp:
+                with (
+                    patch("src.services.video.renderer.playwright_manager._browser", browser),
+                    patch(
+                        "src.services.video.renderer.load_cursor_image",
+                        return_value=(Image.new("RGBA", (12, 12), (0, 0, 0, 255)), (0, 0)),
+                    ),
+                ):
+                    output = await BrowserFrameRenderer(config).render(
+                        [timeline],
+                        Path(temp),
+                    )
+            return len(output.frame_paths)
+
+        base = VideoRenderConfig(
+            width=320,
+            height=180,
+            fps=10,
+            action_speed=5.0,
+            random_seed=42,
+        )
+
+        sticky_count = await render_count(replace(base, camera_sticky_enabled=True))
+        normal_count = await render_count(replace(base, camera_sticky_enabled=False))
+
+        self.assertLess(sticky_count, normal_count)
+
+    def test_press_frames_scale_cursor_down_only(self):
+        renderer = BrowserFrameRenderer(
+            VideoRenderConfig(
+                width=320,
+                height=180,
+                fps=10,
+                action_speed=1,
+                random_seed=1,
+                click_press_frames=5,
+                click_press_scale_min=0.5,
+            )
+        )
+        presses: list[float] = []
+
+        def fake_compose(*args, cursor_press: float = 1.0, **kwargs):
+            from PIL import Image
+
+            presses.append(cursor_press)
+            return Image.new("RGB", (320, 180), (255, 255, 255))
+
+        renderer._compose_frame = fake_compose
+        renderer._press_frames(
+            image=None,
+            target=Rect(80, 45, 80, 32),
+            cursor=Point(120, 61),
+            cursor_kind="hand",
+        )
+
+        self.assertEqual(min(presses), 0.5)
+        self.assertEqual(presses[0], 1.0)
+        self.assertEqual(presses[-1], 1.0)
+
     async def test_live_renderer_goto_uses_bounding_box_and_clicks(self):
         page = FakePage()
         browser = Mock()
