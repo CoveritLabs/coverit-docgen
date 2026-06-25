@@ -45,6 +45,7 @@ class ManualBugTaskTests(unittest.IsolatedAsyncioTestCase):
                 return_value=VideoGenerationResult(
                     status="success",
                     session_id="session-1",
+                    graph_id="graph-1",
                     artifact_path=str(artifact_path),
                     duration_seconds=1.0,
                     resolution="1280x720",
