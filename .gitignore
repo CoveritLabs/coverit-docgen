@@ -132,6 +132,10 @@ __pypackages__/
 celerybeat-schedule
 celerybeat.pid
 
+# Runtime artifacts
+artifacts/*
+!artifacts/.gitkeep
+
 # SageMath parsed files
 *.sage.py
 
@@ -211,3 +215,6 @@ __marimo__/
 .env.local
 .env.*.local
 .env.*
+!.env.example
+
+logs/*

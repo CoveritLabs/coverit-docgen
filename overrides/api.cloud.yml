@@ -2,13 +2,13 @@
 # Proprietary and confidential. Unauthorized use is strictly prohibited.
 # See LICENSE file in the project root for full license information.
 
-# Cloud override — points API at cloud db/redis (e.g. Aiven).
-# Requires DATABASE_URL, REDIS_URL, and JWT_SECRET in .env.
-#
-# Used by:
-#   ./docker.sh up             → remote image + cloud
-#   ./docker.sh up --test-prod → local prod build + cloud
+# Cloud override - points DocGen at externally provided services.
+# Requires REDIS_URL, API_BASE_URL, and INTERNAL_SERVICE_TOKEN in .env/env.
 
 services:
-  worker:
+  docgen:
+    environment:
+      - REDIS_URL=${REDIS_URL}
+      - API_BASE_URL=${API_BASE_URL:-http://api:3000/api/v1}
+      - INTERNAL_SERVICE_TOKEN=${INTERNAL_SERVICE_TOKEN:-}
     depends_on: []

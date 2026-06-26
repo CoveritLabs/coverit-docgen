@@ -1,4 +1,3 @@
-import os
 import logging
 import uuid
 import json
@@ -10,6 +9,7 @@ from src.core.config import get_settings
 from src.core.neo import neo_manager
 from src.models.bdd import BddGenerationInput
 from src.repositories.bdd_repo import BddRepository
+from src.services.assertions import SemanticAssertionService
 from src.services.bdd.regression import compile_bdd
 
 settings = get_settings()
@@ -17,6 +17,15 @@ logger = logging.getLogger("arq.worker.bdd")
 
 BULLMQ_QUEUE = "bdd-processing-queue"
 BULLMQ_JOB_NAME = "task_process_bdd_output"
+
+
+def _failed_result(graph_id: str | None, exc: Exception) -> dict:
+    return {
+        "status": "failed",
+        "graph_id": graph_id,
+        "lastError": str(exc),
+        "error": {"type": type(exc).__name__, "message": str(exc)},
+    }
 
 
 async def _enqueue_bullmq_job(redis, queue: str, job_name: str, data: dict) -> str:
@@ -55,138 +64,185 @@ async def _enqueue_bullmq_job(redis, queue: str, job_name: str, data: dict) -> s
 
 async def task_generate_bdd(ctx: dict, payload: dict) -> dict:
     """Generate BDD artifacts after all graph records are labeled."""
-    request = BddGenerationInput.model_validate(payload)
-    session_id = request.session_id
-    job_try = int(ctx.get("job_try", 1))
-
-    async with neo_manager.driver.session() as session:
-        repo = BddRepository(session)
-        status = await repo.get_labeling_status(session_id)
-        if status["state_count"] == 0:
-            raise ValueError(f"Session {session_id} contains no states")
-
-        invalid = status["invalid_states"] + status["invalid_transitions"]
-        if invalid:
-            raise ValueError(
-                f"Session {session_id} contains {invalid} invalid labeling statuses"
-            )
-
-        pending = status["pending_states"] + status["pending_transitions"]
-        queued = status["queued_states"] + status["queued_transitions"]
-        if pending or queued:
-            logger.info(
-                f"[BDD:{session_id}] Incomplete labeling detected. "
-                f"States (Pending: {status['pending_states']}, "
-                f"Queued: {status['queued_states']}) | "
-                f"Transitions (Pending: {status['pending_transitions']}, "
-                f"Queued: {status['queued_transitions']})"
-            )
-            if job_try >= settings.bdd_max_retries:
-                raise RuntimeError(
-                    f"Labeling did not complete for session {session_id} "
-                    f"after {job_try} attempts"
-                )
-
-            if pending:
-                claim = await repo.claim_unlabeled(
-                    session_id,
-                    uuid.uuid4().hex,
-                )
-                state_ids = claim.get("state_ids") or []
-                transition_ids = claim.get("transition_ids") or []
-                if state_ids or transition_ids:
-                    try:
-                        job = await ctx["redis"].enqueue_job(
-                            "task_label_graph",
-                            session_id,
-                        )
-                        if job is None:
-                            raise RuntimeError("ARQ did not enqueue the labeling job")
-                    except Exception:
-                        logger.error(f"Labeling session {session_id} Failed")
-                        await repo.rollback_claim(
-                            session_id,
-                            state_ids,
-                            transition_ids,
-                        )
-                        raise
-
-            logger.info(
-                f"[BDD:{session_id}] Waiting for labeling completion "
-                f"on attempt {job_try}"
-            )
-            raise Retry(defer=settings.bdd_retry_delay_seconds)
-
-        flows = await repo.resolve_flows(session_id, request.flows)
-        state_hashes = list(
+    graph_id = payload.get("graph_id") if isinstance(payload, dict) else None
+    try:
+        request = BddGenerationInput.model_validate(payload)
+        print(request)
+        graph_id = request.graph_id
+        job_try = int(ctx.get("job_try", 1))
+        flow_ids = list(
             dict.fromkeys(
-                state.state_hash
-                for flow in flows
-                for transition in flow.transitions
-                for state in (transition.from_state, transition.to_state)
+                [
+                    *(flow_id for flow_id in request.flow_ids if flow_id),
+                    *(flow.flow_id for flow in request.flows if flow.flow_id),
+                ]
             )
         )
-        outgoing_locators = await repo.get_outgoing_locators(
-            session_id,
-            state_hashes,
+
+        async with neo_manager.driver.session() as session:
+            repo = BddRepository(session)
+            status = await repo.get_labeling_status(graph_id, request.flows)
+            if status["state_count"] == 0:
+                raise ValueError(f"Graph {graph_id} contains no states")
+
+            invalid = status["invalid_states"] + status["invalid_transitions"]
+            if invalid:
+                raise ValueError(
+                    f"Graph {graph_id} contains {invalid} invalid labeling statuses"
+                )
+
+            pending = status["pending_states"] + status["pending_transitions"]
+            queued = status["queued_states"] + status["queued_transitions"]
+            if pending or queued:
+                logger.info(
+                    f"[BDD:{graph_id}] Incomplete labeling detected. "
+                    f"States (Pending: {status['pending_states']}, "
+                    f"Queued: {status['queued_states']}) | "
+                    f"Transitions (Pending: {status['pending_transitions']}, "
+                    f"Queued: {status['queued_transitions']})"
+                )
+                if job_try >= settings.bdd_max_retries:
+                    raise RuntimeError(
+                        f"Labeling did not complete for graph {graph_id} "
+                        f"after {job_try} attempts"
+                    )
+
+                if pending:
+                    claim = await repo.claim_unlabeled(
+                        graph_id,
+                        uuid.uuid4().hex,
+                        request.flows,
+                    )
+                    state_ids = claim.get("state_ids") or []
+                    transition_ids = claim.get("transition_ids") or []
+                    if state_ids or transition_ids:
+                        try:
+                            job = await ctx["redis"].enqueue_job(
+                                "task_label_graph",
+                                graph_id,
+                            )
+                            if job is None:
+                                raise RuntimeError(
+                                    "ARQ did not enqueue the labeling job"
+                                )
+                        except Exception as exc:
+                            logger.exception(
+                                f"[BDD:{graph_id}] Failed to enqueue graph labeling; "
+                                "rolling back its claim"
+                            )
+                            await repo.rollback_claim(
+                                graph_id,
+                                state_ids,
+                                transition_ids,
+                            )
+                            return _failed_result(graph_id, exc)
+
+                logger.info(
+                    f"[BDD:{graph_id}] Waiting for labeling completion "
+                    f"on attempt {job_try}"
+                )
+                raise Retry(defer=settings.bdd_retry_delay_seconds)
+
+            flows = await repo.resolve_flows(graph_id, request.flows)
+            state_hashes = list(
+                dict.fromkeys(
+                    state.state_hash
+                    for flow in flows
+                    for transition in flow.transitions
+                    for state in (transition.from_state, transition.to_state)
+                )
+            )
+            outgoing_locators = await repo.get_outgoing_locators(
+                graph_id,
+                state_hashes,
+            )
+        
+        compiled = await compile_bdd(
+            flows,
+            outgoing_locators,
+            SemanticAssertionService(settings),
         )
 
-    compiled = compile_bdd(
-        flows,
-        outgoing_locators,
-        split_features=settings.bdd_split_features,
-        feature_similarity_threshold=settings.bdd_feature_similarity_threshold,
-        singleton_merge_threshold=settings.bdd_singleton_merge_threshold,
-    )
-    logger.info(
-        f"[BDD:{session_id}] Generated {len(compiled.features)} feature(s) "
-        f"with {len(flows)} scenarios"
-    )
+        logger.info(
+            f"[BDD:{graph_id}] Generated {len(compiled.features)} feature(s) "
+            f"with {len(flows)} scenarios"
+        )
 
-    result_payload = {
-        "status": "success",
-        "session_id": session_id,
-        "features": [
-            {
-                "id": feature.id,
-                "feature_name": feature.feature_name,
-                "feature_text": feature.feature_text,
-                "scenario_names": feature.scenario_names,
-            }
-            for feature in compiled.features
-        ],
-        "states": compiled.states,
-        "transitions": compiled.transitions,
-        "assertions": {},
-        "action_hooks": {},
-    }
-    if compiled.feature_name is not None and compiled.feature_text is not None:
-        result_payload["feature_name"] = compiled.feature_name
-        result_payload["feature_text"] = compiled.feature_text
+        result_payload = {
+            "status": "success",
+            "graph_id": graph_id,
+            "session_id": payload["session_id"],
+            "features": [
+                {
+                    "id": feature.id,
+                    "feature_name": feature.feature_name,
+                    "feature_text": feature.feature_text,
+                    "scenario_names": feature.scenario_names,
+                }
+                for feature in compiled.features
+            ],
+            "states": compiled.states,
+            "transitions": compiled.transitions,
+            "assertions": compiled.assertions,
+            "action_hooks": compiled.action_hooks,
+            "design_classes": compiled.design_classes,
+            "flow_ids": flow_ids,
+        }
 
-    # add a job for the code-gen worker
-    await _enqueue_bullmq_job(
-        ctx["redis"],
-        BULLMQ_QUEUE,
-        BULLMQ_JOB_NAME,
-        result_payload,
-    )
+        if compiled.features:
+            result_payload["feature_name"] = compiled.features[0].feature_name
+            result_payload["feature_text"] = compiled.features[0].feature_text
 
-    json_path = "./src/result.json"
+        if request.regression_codebase_id:
+            result_payload["regression_codebase_id"] = request.regression_codebase_id
 
+        if request.codegen_config:
+            result_payload["codegen_config"] = request.codegen_config
+
+        save_result_payload(result_payload, "artifacts")
+
+        await _enqueue_bullmq_job(
+            ctx["redis"],
+            BULLMQ_QUEUE,
+            BULLMQ_JOB_NAME,
+            result_payload,
+        )
+
+        return result_payload
+    except Retry:
+        raise
+    except Exception as exc:
+        logger.exception(f"[BDD:{graph_id}] Generation failed")
+        return _failed_result(graph_id, exc)
+
+
+import json
+from pathlib import Path
+
+
+def save_result_payload(result_payload: dict, output_dir: str = "output") -> None:
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    # Save full JSON
+    json_path = output_path / "result.json"
     with open(json_path, "w", encoding="utf-8") as f:
         json.dump(result_payload, f, indent=4, ensure_ascii=False)
-    
-    features_dir =  "./src/features"
-    os.makedirs(features_dir, exist_ok=True)
 
-    for feature in result_payload["features"]:
-        # make filename safe
-        filename = feature["feature_name"].replace(" ", "_").lower()
+    # Save feature files from result_payload["features"]
+    for feature in result_payload.get("features", []):
+        feature_name = feature["feature_name"]
+        feature_text = feature["feature_text"]
 
-        feature_path = f"{features_dir}/{filename}.feature"
+        feature_file = output_path / f"{feature_name}.feature"
 
-        with open(feature_path, "w", encoding="utf-8") as f:
-            f.write(feature["feature_text"])
+        with open(feature_file, "w", encoding="utf-8") as f:
+            f.write(feature_text)
 
-    return result_payload
+    # Save top-level feature_text if it exists
+    if "feature_text" in result_payload:
+        feature_name = result_payload.get("feature_name", "main_feature")
+        feature_file = output_path / f"{feature_name}.feature"
+
+        with open(feature_file, "w", encoding="utf-8") as f:
+            f.write(result_payload["feature_text"])

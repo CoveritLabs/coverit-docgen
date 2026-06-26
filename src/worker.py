@@ -8,11 +8,11 @@ setup_logging(settings)
 
 import logging
 import json
+from typing import Any
 
 from arq import cron, func
 
 from src.core.playwright import playwright_manager
-from src.core.database import session_manager
 from src.core.neo import neo_manager
 from src.core.redis import redis_settings
 from src.tasks.labeling import (
@@ -22,68 +22,75 @@ from src.tasks.labeling import (
 )
 from src.tasks.poller import cron_poll_unlabeled_data
 from src.tasks.bdd import task_generate_bdd
+from src.tasks.guides import task_generate_user_guide
+from src.tasks.video import task_generate_video
+from src.tasks.reporter import (
+    cron_poll_scenario_reports,
+    task_report_scenario_to_provider,
+)
+from src.tasks.manual_bug import task_generate_manual_bug_report
 from src.utils.helpers import parse_cron_string
 
 logger = logging.getLogger("arq.worker")
 
 CRON_HOURS = parse_cron_string(settings.poller_cron_hours)
 CRON_MINUTES = parse_cron_string(settings.poller_cron_minutes)
+JIRA_REPORT_CRON_MINUTES = parse_cron_string(settings.jira_report_cron_minutes)
+
+
+def arq_job_serializer(value: Any) -> bytes:
+    return json.dumps(value, separators=(",", ":"), default=str).encode("utf-8")
+
+
+def arq_job_deserializer(value: bytes) -> Any:
+    return json.loads(value.decode("utf-8"))
 
 
 async def startup(ctx: dict) -> None:
-    """Initialize database clients and immediately poll for queued work."""
-    await session_manager.init()
+    """Initialize external clients and immediately poll for queued work."""
     neo_manager.init()
     await playwright_manager.start()
-    logger.info("Worker initialized database connections")
-
-    with open("./src/all_flows.json") as f:
-        test_flows = json.load(f)
-
-    all_flows = []
-    for to_state, flows in test_flows.items():
-        all_flows.extend(
-            [
-                {
-                    "checkpoint_hash": flow["checkpoint"],
-                    "transition_ids": flow["transition_refs"],
-                }
-                for flow in flows
-            ]
-        )
-    payload = {"session_id": "8d03dd93-1cba-4ad1-8f72-a20caf5519e8", "flows": all_flows}
-
-    await ctx["redis"].enqueue_job(
-        "task_generate_bdd",
-        payload=payload,
-    )
-    # await cron_poll_unlabeled_data(ctx)
+    logger.info("Worker initialized external connections")
 
 
 async def shutdown(ctx: dict) -> None:
-    """Close database clients during worker shutdown."""
-    await session_manager.close()
+    """Close external clients during worker shutdown."""
     await neo_manager.close()
     await playwright_manager.stop()
-    logger.info("Worker closed database connections")
+    logger.info("Worker closed external connections")
 
 
 class WorkerSettings:
     """ARQ hooks, tasks, schedule, and Redis connection settings."""
 
+    queue_name = "docgen:queue"
     on_startup = startup
     on_shutdown = shutdown
+    job_serializer = arq_job_serializer
+    job_deserializer = arq_job_deserializer
     functions = [
         task_label_state_by_id,
         task_label_transition_by_id,
         task_label_graph,
         func(task_generate_bdd, max_tries=settings.bdd_max_retries),
+        func(task_generate_user_guide, max_tries=settings.bdd_max_retries),
+        func(task_generate_video, max_tries=settings.video_max_retries, timeout=1200),
+        func(
+            task_generate_manual_bug_report,
+            max_tries=settings.manual_report_max_retries,
+            timeout=settings.manual_report_timeout_seconds,
+        ),
+        func(task_report_scenario_to_provider, max_tries=settings.scenario_report_max_retries),
     ]
     cron_jobs = [
         cron(
             cron_poll_unlabeled_data,
-            hour=CRON_HOURS,
-            minute=CRON_MINUTES,
+            hour=CRON_HOURS or list(range(0, 24, 1)),
+            minute=CRON_MINUTES or list(range(0, 60, 1)),
+        ),
+        cron(
+            cron_poll_scenario_reports,
+            minute=JIRA_REPORT_CRON_MINUTES or list(range(0, 60, 1))
         )
     ]
     redis_settings = redis_settings

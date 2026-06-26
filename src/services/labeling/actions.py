@@ -38,7 +38,7 @@ class ActionDescription:
         "image": lambda name: f'Click on image "{name}"',
         "link": lambda name: f'Click link "{name}"',
         "link_in_nav": lambda name: f'Navigate to "{name}"',
-        "button": lambda name: f'Click "{name}" button',
+        "button": lambda name: f'Click "{name}"',
         "input": lambda name: f'Fill out the "{name}" input',
         "select": lambda name: f'Select from "{name}" Filter',
         "textarea": lambda name: f'Type in "{name}"',

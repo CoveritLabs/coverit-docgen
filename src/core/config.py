@@ -1,4 +1,5 @@
 from functools import lru_cache
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -7,16 +8,53 @@ class Settings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
+        extra="ignore",
     )
 
     # Constants
-    max_sessions_per_poll: int = 5
+    max_graphs_per_poll: int = 5
     context_distance_threshold: float = 0.40
     bdd_retry_delay_seconds: int = 30
     bdd_max_retries: int = 5
     bdd_split_features: bool = False
     bdd_feature_similarity_threshold: float = 0.42
     bdd_singleton_merge_threshold: float = 0.25
+    semantic_assertions_enabled: bool = False
+    semantic_assertions_provider: str = "gemini"
+    semantic_assertions_model_base_url: str = "http://localhost:8000/v1"
+    semantic_assertions_model_name: str = "Qwen/Qwen2.5-Coder-1.5B-Instruct"
+    semantic_assertions_gemini_model: str = "gemini-2.5-flash-lite"
+    semantic_assertions_timeout_seconds: int = 20
+    semantic_assertions_max_assertions_per_scenario: int = 2
+    semantic_assertions_min_confidence: float = 0.65
+    semantic_assertions_html_summary_max_chars: int = 12000
+    video_retry_delay_seconds: int = 30
+    video_max_retries: int = 5
+    video_output_dir: str = "artifacts/videos"
+    video_default_width: int = 1280
+    video_default_height: int = 720
+    video_default_fps: int = 30
+    video_action_speed: float = 0.5
+    video_random_seed: int = 42
+    video_window_scale: float = Field(default=0.86, gt=0.0, le=1.0)
+    video_focus_zoom: float = Field(default=1.4, ge=1.0, le=2.0)
+    video_focus_padding: float = Field(default=18.0, ge=0.0)
+    video_rest_intro_seconds: float = Field(default=0.20, ge=0.0)
+    video_zoom_in_seconds: float = Field(default=0.50, ge=0.0)
+    video_cursor_move_seconds: float = Field(default=0.55, ge=0.0)
+    video_action_hold_seconds: float = Field(default=0.15, ge=0.0)
+    video_zoom_out_seconds: float = Field(default=0.65, ge=0.0)
+    video_rest_outro_seconds: float = Field(default=0.20, ge=0.0)
+    video_focus_pan_seconds: float = Field(default=0.35, ge=0.0)
+    video_sticky_camera_enabled: bool = True
+    video_sticky_max_distance_px: float = Field(default=520.0, ge=0.0)
+    video_sticky_max_axis_ratio: float = Field(default=0.55, ge=0.0)
+    video_click_press_frames: int = Field(default=5, ge=1)
+    video_click_press_scale_min: float = Field(default=0.72, ge=0.1, le=1.0)
+    ffmpeg_path: str | None = None
+    scenario_report_max_retries: int = 1
+    manual_report_max_retries: int = 1
+    manual_report_timeout_seconds: int = 900
 
     # Application
     app_name: str = "DocGen"
@@ -24,23 +62,20 @@ class Settings(BaseSettings):
     debug: bool = False
     environment: str = "development"
 
-    # Database
-    db_user: str = "postgres"
-    db_password: str = "postgres"
-    db_name: str = "postgres"
-
-    database_url: str = (
-        "postgresql+asyncpg://postgres:postgres@db:5432/coverit?schema=public"
-    )
-
     # External Services
     redis_url: str = "redis://redis:6379"
+    api_base_url: str = "http://localhost:3000/api/v1"
+    internal_service_token: str = ""
+    gemini_api_key: str = "AIzaSyD__8pzxbF02FoswxBcdDsBKOm-PHTUpAQ"
     neo4j_url: str = "bolt://localhost:7687"
     neo4j_password: str = "password"
     neo4j_username: str = "neo4j"
 
+    # Poller
     poller_cron_hours: str = "0,4,8,12,16,20"
     poller_cron_minutes: str = "0"
+    jira_report_cron_minutes: str = None
+    jira_report_poll_batch_size: int = 3
 
     # CORS
     allowed_origins: list[str] = ["http://localhost:3000"]

@@ -20,7 +20,7 @@ class CrawlerTransition(BaseModel):
     from_state_id: str
     to_state_id: str
     locator: str
-    action_value: List[Dict[str, Any]]
+    action_value: List[Dict[str, Any]] = Field(default_factory=list)
 
 
 class LabeledTransition(BaseModel):
@@ -41,7 +41,7 @@ class CrawlerGraph(BaseModel):
     The complete graph topology of the crawled application.
     """
 
-    session_id: str
+    graph_id: str
     states: Dict[str, CrawlerState] = Field(
         description="Dictionary mapping state_id to CrawlerState"
     )
@@ -59,7 +59,7 @@ class LabeledGraph(BaseModel):
     Ideal for active labeling tools and database storage.
     """
 
-    session_id: str
+    graph_id: str
     crawler_graph: CrawlerGraph
     state_labels: Dict[str, LabeledState]
     transition_labels: Dict[str, LabeledTransition]

@@ -1,0 +1,17 @@
+{
+  "default": {
+    "file": "default.png",
+    "source": "default.svg",
+    "hotspot": [3, 3]
+  },
+  "hand": {
+    "file": "handpointing.png",
+    "source": "handpointing.svg",
+    "hotspot": [3, 3]
+  },
+  "text": {
+    "file": "textcursor.png",
+    "source": "textcursor.svg",
+    "hotspot": [0, 20]
+  }
+}
