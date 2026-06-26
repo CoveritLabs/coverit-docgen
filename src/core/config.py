@@ -34,7 +34,7 @@ class Settings(BaseSettings):
     video_default_width: int = 1280
     video_default_height: int = 720
     video_default_fps: int = 30
-    video_action_speed: float = 1.0
+    video_action_speed: float = 0.5
     video_random_seed: int = 42
     video_window_scale: float = Field(default=0.86, gt=0.0, le=1.0)
     video_focus_zoom: float = Field(default=1.4, ge=1.0, le=2.0)
