@@ -260,4 +260,4 @@ class CompiledBdd:
     transitions: dict[str, dict]
     assertions: dict[str, dict]
     action_hooks: dict[str, dict]
-    design_class: dict[str, Any] | None = None
+    design_classes: dict[str, dict] | None = None

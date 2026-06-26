@@ -7,14 +7,16 @@ from src.models.bdd import (
     CompiledFeature,
     CompiledBdd,
     FeaturePlan,
-    FlowEditorStepKind,
     ResolvedFlow,
     ResolvedState,
     ResolvedTransition,
     ScenarioPlan,
+    FlowEditorDraftStep,
     SemanticAssertion,
     StepPlan,
+    FLOW_TO_STEP_TYPE,
     StepType,
+    FlowEditorStepKind,
     FlowEditorPositionEdge,
 )
 from src.utils.helpers import title, upper_snake
@@ -30,9 +32,8 @@ from src.services.bdd.generate_mapping import (
 if TYPE_CHECKING:
     from src.services.assertions import SemanticAssertionService
 from src.services.bdd.editor_steps import (
-    DESIGN_CLASS_ID,
     editor_steps_by_transition,
-    executable_step_type,
+    generated_editor_step_names,
     hook_phrase_timing,
 )
 
@@ -121,16 +122,17 @@ def _build_feature_plan(
     transition_ids: dict[str, str],
     flow_to_index: dict[int, int],
     semantic_assertions: dict[int, list[SemanticAssertion]],
+    editor_step_names: dict[int, str],
 ) -> FeaturePlan:
     scenarios: list[ScenarioPlan] = []
 
-    def make_edit_step(edit) -> StepPlan:
+    def make_edit_step(edit: FlowEditorDraftStep) -> StepPlan:
         metadata = {}
-        if executable_step_type(edit) == StepType.ACTION_HOOK:
+        if FLOW_TO_STEP_TYPE[edit.kind] == StepType.ACTION_HOOK:
             metadata["timing"] = hook_phrase_timing(edit.position.edge)
         return StepPlan(
-            type=executable_step_type(edit),
-            id=edit.id,
+            type=FLOW_TO_STEP_TYPE[edit.kind],
+            id=editor_step_names[id(edit)],
             keyword="And",
             metadata=metadata,
         )
@@ -138,15 +140,6 @@ def _build_feature_plan(
     for flow, scenario_name in zip(flows, _scenario_names(flows)):
         edits_by_transition = editor_steps_by_transition(flow)
         steps: list[StepPlan] = []
-        if any(edit.kind == FlowEditorStepKind.DESIGN_CLASS for edit in flow.editor_steps):
-            steps.append(
-                StepPlan(
-                    type=StepType.DESIGN_CLASS,
-                    id=DESIGN_CLASS_ID,
-                    keyword="Given",
-                )
-            )
-
         steps.append(
             StepPlan(
                 type=StepType.STATE,
@@ -166,8 +159,7 @@ def _build_feature_plan(
             )
 
             for edit in transition_edits[FlowEditorPositionEdge.BEFORE]:
-                if edit.kind == FlowEditorStepKind.ASSERTION:
-                    steps.append(make_edit_step(edit))
+                steps.append(make_edit_step(edit))
 
             steps.append(
                 StepPlan(
@@ -177,12 +169,8 @@ def _build_feature_plan(
                 )
             )
 
-            for edit in transition_edits[FlowEditorPositionEdge.BEFORE]:
-                if edit.kind != FlowEditorStepKind.ASSERTION:
-                    steps.append(make_edit_step(edit))
-
             for edit in transition_edits[FlowEditorPositionEdge.AFTER]:
-                if edit.kind != FlowEditorStepKind.ASSERTION:
+                if edit.kind == FlowEditorStepKind.ACTION_HOOK:
                     steps.append(make_edit_step(edit))
 
             steps.append(
@@ -195,7 +183,7 @@ def _build_feature_plan(
             )
 
             for edit in transition_edits[FlowEditorPositionEdge.AFTER]:
-                if edit.kind == FlowEditorStepKind.ASSERTION:
+                if edit.kind != FlowEditorStepKind.ACTION_HOOK:
                     steps.append(make_edit_step(edit))
 
         for assertion in semantic_assertions.get(
@@ -233,6 +221,7 @@ async def compile_bdd(
     state_ids = _assign_ids(states, "S")
     transition_ids = _assign_ids(transitions, "T")
     flow_to_index = {id(flow): index for index, flow in enumerate(flows)}
+    editor_step_names = generated_editor_step_names(flows)
 
     scenario_names = _scenario_names(flows)
     semantic_assertions = (
@@ -252,22 +241,19 @@ async def compile_bdd(
             transition_ids,
             flow_to_index,
             semantic_assertions,
+            editor_step_names,
         )
         for name, group in zip(feature_names, flow_groups)
     ]
 
-    user_assertions, action_hooks, design_class = generate_user_edit_mappings(
+    user_assertions, action_hooks, design_classes = generate_user_edit_mappings(
         flows,
         state_ids,
         transition_ids,
+        editor_step_names,
     )
+    
     assertions = generate_assertion_mappings(semantic_assertions, state_ids)
-    duplicate_assertion_ids = set(assertions).intersection(user_assertions)
-    if duplicate_assertion_ids:
-        raise ValueError(
-            "User editor assertions conflict with generated assertion ids: "
-            + ", ".join(sorted(duplicate_assertion_ids))
-        )
     assertions.update(user_assertions)
 
     features = [
@@ -290,5 +276,5 @@ async def compile_bdd(
         ),
         assertions=assertions,
         action_hooks=action_hooks,
-        design_class=design_class,
+        design_classes=design_classes,
     )

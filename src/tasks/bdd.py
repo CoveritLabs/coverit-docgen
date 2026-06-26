@@ -67,6 +67,7 @@ async def task_generate_bdd(ctx: dict, payload: dict) -> dict:
     graph_id = payload.get("graph_id") if isinstance(payload, dict) else None
     try:
         request = BddGenerationInput.model_validate(payload)
+        print(request)
         graph_id = request.graph_id
         job_try = int(ctx.get("job_try", 1))
         flow_ids = list(
@@ -184,7 +185,7 @@ async def task_generate_bdd(ctx: dict, payload: dict) -> dict:
             "transitions": compiled.transitions,
             "assertions": compiled.assertions,
             "action_hooks": compiled.action_hooks,
-            "design_class": compiled.design_class,
+            "design_classes": compiled.design_classes,
             "flow_ids": flow_ids,
         }
 

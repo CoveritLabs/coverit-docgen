@@ -2,30 +2,22 @@ from collections import defaultdict
 from typing import Literal
 
 from src.models.bdd import (
-    FLOW_TO_STEP_TYPE,
     FlowEditorDraftStep,
     FlowEditorPositionEdge,
     FlowEditorStepKind,
     ResolvedFlow,
     ResolvedState,
     ResolvedTransition,
-    StepType,
 )
 
-DESIGN_CLASS_ID = "scenarioData"
 HookPhraseTiming = Literal["before", "after"]
 HookMappingTiming = Literal["pre", "post"]
 
-
-def editor_step_sort_key(step: FlowEditorDraftStep) -> tuple[str, int, int, str]:
-    edge_rank = 0 if step.position.edge == FlowEditorPositionEdge.BEFORE else 1
-    return (step.position.transitionId, edge_rank, step.order, step.id)
-
-
-def sorted_editor_steps(
-    steps: list[FlowEditorDraftStep],
-) -> list[FlowEditorDraftStep]:
-    return sorted(steps, key=editor_step_sort_key)
+EDITOR_STEP_NAME_PREFIXES = {
+    FlowEditorStepKind.ASSERTION: "ASSERTION",
+    FlowEditorStepKind.ACTION_HOOK: "HOOK",
+    FlowEditorStepKind.DESIGN_CLASS: "DESIGN_CLASS",
+}
 
 
 def transition_by_input_id(flow: ResolvedFlow) -> dict[str, ResolvedTransition]:
@@ -36,11 +28,28 @@ def editor_steps_by_transition(
     flow: ResolvedFlow,
 ) -> dict[str, dict[FlowEditorPositionEdge, list[FlowEditorDraftStep]]]:
     grouped: dict[str, dict[FlowEditorPositionEdge, list[FlowEditorDraftStep]]] = (
-        defaultdict(lambda: {FlowEditorPositionEdge.BEFORE: [], FlowEditorPositionEdge.AFTER: []})
+        defaultdict(
+            lambda: {
+                FlowEditorPositionEdge.BEFORE: [],
+                FlowEditorPositionEdge.AFTER: [],
+            }
+        )
     )
-    for step in sorted_editor_steps(flow.editor_steps):
+    for step in flow.editor_steps:
         grouped[step.position.transitionId][step.position.edge].append(step)
     return grouped
+
+
+def generated_editor_step_names(flows: list[ResolvedFlow]) -> dict[int, str]:
+    counters: dict[FlowEditorStepKind, int] = defaultdict(int)
+    names: dict[int, str] = {}
+    for flow in flows:
+        for step in flow.editor_steps:
+            counters[step.kind] += 1
+            names[id(step)] = (
+                f"{EDITOR_STEP_NAME_PREFIXES[step.kind]}_{counters[step.kind]}"
+            )
+    return names
 
 
 def hook_phrase_timing(edge: FlowEditorPositionEdge) -> HookPhraseTiming:
@@ -58,9 +67,3 @@ def target_state_for_editor_step(
     if step.position.edge == FlowEditorPositionEdge.BEFORE:
         return transition.from_state
     return transition.to_state
-
-
-def executable_step_type(step: FlowEditorDraftStep) -> StepType:
-    if step.kind == FlowEditorStepKind.DESIGN_CLASS:
-        return StepType.ACTION_HOOK
-    return FLOW_TO_STEP_TYPE[step.kind]
