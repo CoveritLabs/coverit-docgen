@@ -4,6 +4,7 @@ All Jira-specific concerns (ADF formatting, multipart attachment quirks,
 auth header shape) live here.
 """
 
+import re
 import uuid
 from urllib.parse import quote
 
@@ -21,8 +22,9 @@ class JiraProvider(IssueProvider):
             "fields": {
                 "project": {"id": context["reportingConfig"]["project"]["id"]},
                 "issuetype": {"id": context["reportingConfig"]["issueType"]["id"]},
-                "summary": context["report"]["title"],
+                "summary": self._jira_summary(context["report"]["title"]),
                 "description": self._adf_description(context["structuredDescription"]),
+                "labels": self._labels(context),
             }
         }
         access = context["access"]
@@ -103,10 +105,47 @@ class JiraProvider(IssueProvider):
         }
 
     @staticmethod
+    def _labels(context: dict) -> list[str]:
+        labels = ["coverit"]
+        application_name = context.get("applicationName") or context.get("application_name")
+        application_slug = JiraProvider._label_slug(application_name)
+        if application_slug:
+            labels.append(f"coverit-app-{application_slug}"[:255])
+        return labels
+
+    @staticmethod
+    def _jira_summary(value: object) -> str:
+        if not isinstance(value, str):
+            return "Untitled report"
+        first_line = value.strip().splitlines()[0] if value.strip() else ""
+        summary = re.sub(r"\s+", " ", first_line).strip()
+        return summary[:255] or "Untitled report"
+
+    @staticmethod
+    def _label_slug(value: object) -> str:
+        if not isinstance(value, str):
+            return ""
+        slug = re.sub(r"[^a-z0-9]+", "-", value.strip().lower()).strip("-")
+        return re.sub(r"-{2,}", "-", slug)
+
+    @staticmethod
     def _adf_paragraph(text: str) -> dict:
+        content = []
+        lines = (text or " ").splitlines()
+        if not lines:
+            lines = [" "]
+        for index, line in enumerate(lines):
+            if index > 0:
+                content.append({"type": "hardBreak"})
+            if line:
+                content.append({"type": "text", "text": line})
+            elif index == 0 and len(lines) == 1:
+                content.append({"type": "text", "text": " "})
+        if not content or all(item.get("type") == "hardBreak" for item in content):
+            content.append({"type": "text", "text": " "})
         return {
             "type": "paragraph",
-            "content": [{"type": "text", "text": text or " "}],
+            "content": content,
         }
 
     @staticmethod

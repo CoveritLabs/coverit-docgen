@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 
-from src.models.bdd import ResolvedFlow
+from src.models.bdd import ResolvedFlow, ResolvedState
 from src.services.assertions.html_summarizer import HtmlSummary, summarize_html
 
 
@@ -112,7 +112,7 @@ def build_scenario_contexts(
     return contexts
 
 
-def _state_context(state, html_summary_max_chars: int) -> StateContext:
+def _state_context(state: ResolvedState, html_summary_max_chars: int) -> StateContext:
     return StateContext(
         db_id=state.db_id,
         name=state.name,

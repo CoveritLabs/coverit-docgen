@@ -1,3 +1,4 @@
+import asyncio
 import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, Mock, patch
@@ -8,6 +9,10 @@ from src.models.bdd import (
     BddTransitionAction,
     BddFlowInput,
     FeaturePlan,
+    FlowEditorDraftStep,
+    FlowEditorPosition,
+    FlowEditorPositionEdge,
+    FlowEditorStepKind,
     ResolvedFlow,
     ResolvedState,
     ResolvedTransition,
@@ -149,6 +154,74 @@ class BddQueryTests(unittest.TestCase):
 
 
 class BddCompilerTests(unittest.TestCase):
+    def test_user_editor_steps_use_generated_names_in_bdd_and_mappings(self):
+        home = state("s1", "home", "Checkout Page")
+        done = state("s2", "done", "Done Page")
+        submit = transition("t1", "submit", "Submit Checkout", home, done)
+        flow = ResolvedFlow(
+            checkpoint=home,
+            transitions=[submit],
+            editor_steps=[
+                FlowEditorDraftStep(
+                    id="editor-assertion",
+                    kind=FlowEditorStepKind.ASSERTION,
+                    position=FlowEditorPosition(
+                        transitionId="submit",
+                        edge=FlowEditorPositionEdge.AFTER,
+                    ),
+                    label="Check success message",
+                ),
+                FlowEditorDraftStep(
+                    id="editor-hook",
+                    kind=FlowEditorStepKind.ACTION_HOOK,
+                    position=FlowEditorPosition(
+                        transitionId="submit",
+                        edge=FlowEditorPositionEdge.BEFORE,
+                    ),
+                    label="Wait before submit",
+                ),
+                FlowEditorDraftStep(
+                    id="editor-design",
+                    kind=FlowEditorStepKind.DESIGN_CLASS,
+                    position=FlowEditorPosition(
+                        transitionId="submit",
+                        edge=FlowEditorPositionEdge.AFTER,
+                    ),
+                    label="Checkout visual rules",
+                ),
+            ],
+        )
+
+        compiled = asyncio.run(compile_bdd([flow], {}))
+        feature_text = compiled.features[0].feature_text
+
+        self.assertIn('And I assert "ASSERTION_1"', feature_text)
+        self.assertIn('And before action I run hook "HOOK_1"', feature_text)
+        self.assertIn('And I use design class "DESIGN_CLASS_1"', feature_text)
+        self.assertNotIn("Check success message", feature_text)
+        self.assertNotIn("Wait before submit", feature_text)
+        self.assertNotIn("Checkout visual rules", feature_text)
+
+        self.assertIn("ASSERTION_1", compiled.assertions)
+        self.assertIn("HOOK_1", compiled.action_hooks)
+        self.assertIn("DESIGN_CLASS_1", compiled.design_classes)
+        self.assertNotIn("editor-assertion", compiled.assertions)
+        self.assertNotIn("editor-hook", compiled.action_hooks)
+        self.assertNotIn("editor-design", compiled.design_classes)
+
+        assertion = compiled.assertions["ASSERTION_1"]
+        hook = compiled.action_hooks["HOOK_1"]
+        design = compiled.design_classes["DESIGN_CLASS_1"]
+
+        self.assertEqual(assertion["id"], "ASSERTION_1")
+        self.assertEqual(assertion["transitionId"], "T_SUBMIT_CHECKOUT")
+        self.assertEqual(assertion["stateId"], "S_DONE_PAGE")
+        self.assertEqual(hook["id"], "HOOK_1")
+        self.assertEqual(hook["transitionId"], "T_SUBMIT_CHECKOUT")
+        self.assertEqual(design["id"], "DESIGN_CLASS_1")
+        self.assertEqual(design["transitionId"], "T_SUBMIT_CHECKOUT")
+        self.assertEqual(design["stateId"], "S_DONE_PAGE")
+
     def test_compiles_descriptive_feature_and_exact_gherkin(self):
         home = state("s1", "home", "Shopping Home Page")
         cart = state("s2", "cart", "Shopping Cart Page")

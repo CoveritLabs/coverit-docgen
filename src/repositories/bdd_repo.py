@@ -166,6 +166,7 @@ class BddRepository:
                     flow_id=requested.flow_id,
                     checkpoint=checkpoint,
                     transitions=transitions,
+                    editor_steps=requested.editor_steps
                 )
             )
         return resolved

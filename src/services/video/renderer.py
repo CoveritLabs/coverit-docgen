@@ -1,6 +1,9 @@
 from dataclasses import dataclass, replace
 from io import BytesIO
 from pathlib import Path
+import re
+from time import monotonic
+from urllib.parse import urljoin
 from typing import Iterable
 
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
@@ -28,8 +31,10 @@ class CapturedScene:
     image: object
     target: Rect
     document_target: Rect
+    click_point: Point
     scroll: Point
     cursor_kind: CursorKind
+    locator: object | None = None
 
 
 @dataclass(frozen=True)
@@ -135,9 +140,28 @@ class BrowserFrameRenderer:
                 already_focused = False
 
                 for shot_index, shot in enumerate(timeline.shots):
-                    scene = pending_scene or await self._capture_scene(page, shot)
+                    try:
+                        scene = pending_scene or await self._capture_scene_when_ready(
+                            page,
+                            shot,
+                        )
+                    except ValueError as exc:
+                        if await self._perform_missing_selector_action(
+                            page,
+                            shot,
+                            exc,
+                        ):
+                            pending_scene = None
+                            already_focused = False
+                            continue
+                        raise
                     pending_scene = None
-                    target_center = scene.target.center
+                    if scene is None:
+                        await self._perform_nonvisual_action(page, shot)
+                        already_focused = False
+                        continue
+
+                    target_center = scene.click_point
 
                     if already_focused:
                         already_focused = False
@@ -175,6 +199,7 @@ class BrowserFrameRenderer:
                             await self._perform_typing_action(
                                 page,
                                 shot,
+                                scene.locator,
                                 scene.target,
                                 target_center,
                                 scene.cursor_kind,
@@ -183,7 +208,12 @@ class BrowserFrameRenderer:
                         )
                         release_image = await self._capture_page(page)
                     else:
-                        await self._perform_non_typing_action(page, shot)
+                        await self._perform_non_typing_action(
+                            page,
+                            shot,
+                            scene.locator,
+                            target_center,
+                        )
                         release_image = await self._capture_page(page)
                         sink.write(
                             self._press_frames(
@@ -206,9 +236,13 @@ class BrowserFrameRenderer:
 
                     next_scene = None
                     if shot_index + 1 < len(timeline.shots):
-                        next_scene = await self._capture_scene(
+                        next_shot = timeline.shots[shot_index + 1]
+                        next_scene = await self._capture_next_scene_after_action(
                             page,
-                            timeline.shots[shot_index + 1],
+                            shot,
+                            scene,
+                            target_center,
+                            next_shot,
                         )
 
                     if next_scene and self._should_stick_to_next(
@@ -220,11 +254,11 @@ class BrowserFrameRenderer:
                                 release_scene,
                                 next_scene,
                                 target_center,
-                                next_scene.target.center,
+                                next_scene.click_point,
                             )
                         )
                         pending_scene = next_scene
-                        previous_cursor = next_scene.target.center
+                        previous_cursor = next_scene.click_point
                         previous_cursor_kind = next_scene.cursor_kind
                         already_focused = True
                     else:
@@ -265,25 +299,94 @@ class BrowserFrameRenderer:
     # ------------------------------------------------------------------
     # Scene capture helpers
     # ------------------------------------------------------------------
+    async def _try_capture_scene(
+        self,
+        page,
+        shot: VideoShot,
+    ) -> CapturedScene | None:
+        return await self._capture_scene_when_ready(page, shot, timeout_ms=0)
+
+    async def _capture_scene_when_ready(
+        self,
+        page,
+        shot: VideoShot,
+        timeout_ms: int = 7000,
+    ) -> CapturedScene | None:
+        deadline = monotonic() + timeout_ms / 1000
+        last_error: ValueError | None = None
+
+        while True:
+            try:
+                return await self._capture_scene(page, shot)
+            except ValueError as exc:
+                message = str(exc)
+                if "has no visible bounding box" in message:
+                    if await self._is_nonvisual_action_target(page, shot):
+                        return None
+                    last_error = exc
+                elif "did not match" in message:
+                    last_error = exc
+                else:
+                    raise
+
+            if monotonic() >= deadline:
+                raise last_error or ValueError(
+                    f"Selector {shot.selector!r} was not ready for transition "
+                    f"{shot.transition_id}"
+                )
+
+            await self._wait_for_timeout(page, 250)
+
+    async def _capture_next_scene_after_action(
+        self,
+        page,
+        shot: VideoShot,
+        scene: CapturedScene,
+        click_point: Point,
+        next_shot: VideoShot,
+    ) -> CapturedScene | None:
+        try:
+            return await self._capture_scene_when_ready(page, next_shot)
+        except ValueError:
+            if shot.has_typing:
+                await self._press_enter_to_materialize_result(page, next_shot)
+                try:
+                    return await self._capture_scene_when_ready(
+                        page,
+                        next_shot,
+                        timeout_ms=3500,
+                    )
+                except ValueError:
+                    return None
+
+            if shot.has_typing or scene.locator is None:
+                raise
+
+            action_type = shot.action_type.lower()
+            if action_type not in {"", "click", "press", "tap"}:
+                raise
+
+            await self._click_locator_direct(
+                page,
+                scene.locator,
+                scene.target,
+                click_point,
+            )
+            await self._wait_for_page_stability(page)
+            try:
+                return await self._capture_scene_when_ready(page, next_shot)
+            except ValueError:
+                return None
+
     async def _capture_scene(
         self,
         page,
         shot: VideoShot,
     ) -> CapturedScene:
-        locator = page.locator(shot.selector).first
-        if await locator.count() == 0:
-            raise ValueError(
-                f"Selector {shot.selector!r} did not match for transition "
-                f"{shot.transition_id}"
-            )
-
-        await locator.scroll_into_view_if_needed(timeout=5000)
+        locator, box = await self._visible_locator_for(page, shot)
         scroll = await self._page_scroll(page)
-        box = await locator.bounding_box()
-        if box is None:
-            raise ValueError(f"Selector {shot.selector!r} has no visible bounding box")
-
         target = self._box_from_js(box, shot.selector)
+        click_point = self._visible_click_point(target)
         document_target = Rect(
             target.x + scroll.x,
             target.y + scroll.y,
@@ -294,9 +397,169 @@ class BrowserFrameRenderer:
             image=await self._capture_page(page),
             target=target,
             document_target=document_target,
+            click_point=click_point,
             scroll=scroll,
             cursor_kind=await self._cursor_kind_for(locator, shot),
+            locator=locator,
         )
+
+    async def _visible_locator_for(self, page, shot: VideoShot):
+        any_match = False
+        for locator in self._locator_candidates(page, shot.selector):
+            count = await locator.count()
+            if count == 0:
+                continue
+            any_match = True
+
+            fallback = None
+            for index in range(count):
+                nth = getattr(locator, "nth", None)
+                if nth is None:
+                    if index > 0:
+                        break
+                    candidate = locator.first
+                else:
+                    candidate = nth(index)
+                await self._scroll_locator_to_center(page, candidate)
+                box = await candidate.bounding_box()
+                if box is not None:
+                    if fallback is None:
+                        fallback = (candidate, box)
+                    try:
+                        target = self._box_from_js(box, shot.selector)
+                    except ValueError:
+                        continue
+                    if await self._candidate_receives_pointer(
+                        candidate,
+                        self._visible_click_point(target),
+                    ):
+                        return candidate, box
+
+            if fallback is not None:
+                return fallback
+
+        if not any_match:
+            raise ValueError(
+                f"Selector {shot.selector!r} did not match for transition "
+                f"{shot.transition_id}"
+            )
+
+        raise ValueError(f"Selector {shot.selector!r} has no visible bounding box")
+
+    def _locator_candidates(self, page, selector: str):
+        seen: set[str] = set()
+
+        def add_css(css: str):
+            if css and css not in seen:
+                seen.add(css)
+                yield page.locator(css)
+
+        yield from add_css(selector)
+
+        normalized = self._normalize_selector(selector)
+        if normalized != selector:
+            yield from add_css(normalized)
+
+        href = self._href_from_selector(selector)
+        if not href:
+            return
+
+        href_variants = self._href_variants(href)
+        for href_value in href_variants:
+            escaped = self._css_string(href_value)
+            yield from add_css(f'a[href="{escaped}"]')
+            yield from add_css(f'a[href$="{escaped}"]')
+            yield from add_css(f'a[href*="{escaped}"]')
+            yield from add_css(f'a[href$="{escaped}" i]')
+            yield from add_css(f'a[href*="{escaped}" i]')
+
+        for text in self._link_text_candidates(href):
+            locator = page.locator("a")
+            filter_method = getattr(locator, "filter", None)
+            if filter_method is not None:
+                try:
+                    yield filter_method(has_text=text)
+                except TypeError:
+                    pass
+
+    def _normalize_selector(self, selector: str) -> str:
+        return (
+            selector.replace("\\/", "/")
+            .replace('\\"', '"')
+        )
+
+    def _href_from_selector(self, selector: str) -> str | None:
+        match = re.search(r"""href\s*=\s*(['"])(.*?)\1""", selector)
+        if not match:
+            return None
+        return self._normalize_selector(match.group(2))
+
+    def _href_variants(self, href: str) -> list[str]:
+        variants = []
+        for value in {
+            href,
+            href.rstrip("/"),
+            href.lower(),
+            href.lower().rstrip("/"),
+        }:
+            if value and value not in variants:
+                variants.append(value)
+        return variants
+
+    def _link_text_candidates(self, href: str) -> list[str]:
+        path = href.split("?", 1)[0].strip("/")
+        parts = [part for part in path.split("/") if part]
+        candidates: list[str] = []
+        if parts:
+            candidates.append(parts[-1])
+        if len(parts) >= 2:
+            candidates.append("/".join(parts[-2:]))
+        return candidates
+
+    def _css_string(self, value: str) -> str:
+        return value.replace("\\", "\\\\").replace('"', '\\"')
+
+    async def _candidate_receives_pointer(self, locator, point: Point) -> bool:
+        evaluate = getattr(locator, "evaluate", None)
+        if evaluate is None:
+            return True
+
+        try:
+            receives_pointer = await evaluate(
+                """(element, point) => {
+                    const hit = document.elementFromPoint(point.x, point.y);
+                    return hit === element || element.contains(hit);
+                }""",
+                {"x": point.x, "y": point.y},
+            )
+        except Exception:
+            return True
+
+        return bool(receives_pointer)
+
+    async def _scroll_locator_to_center(self, page, locator) -> None:
+        evaluate = getattr(locator, "evaluate", None)
+        if evaluate is not None:
+            try:
+                result = await evaluate(
+                    """element => {
+                        element.scrollIntoView({
+                            block: "center",
+                            inline: "center"
+                        });
+                    }"""
+                )
+                await self._wait_for_timeout(page, 100)
+                if result is None:
+                    return
+            except Exception:
+                pass
+
+        try:
+            await locator.scroll_into_view_if_needed(timeout=5000)
+        except PlaywrightTimeoutError:
+            pass
+        await self._wait_for_timeout(page, 50)
 
     async def _capture_page(self, page):
         from PIL import Image
@@ -324,21 +587,34 @@ class BrowserFrameRenderer:
             return Point(0.0, 0.0)
         return Point(float(value.get("x") or 0.0), float(value.get("y") or 0.0))
 
+    async def _wait_for_timeout(self, page, milliseconds: int) -> None:
+        wait_for_timeout = getattr(page, "wait_for_timeout", None)
+        if wait_for_timeout is None:
+            return
+        try:
+            await wait_for_timeout(milliseconds)
+        except Exception:
+            pass
+
     async def _cursor_kind_for(self, locator, shot: VideoShot) -> CursorKind:
         if shot.has_typing:
             return "text"
 
+        return self._cursor_kind_from_metadata(await self._element_metadata(locator))
+
+    async def _element_metadata(self, locator) -> dict:
         evaluate = getattr(locator, "evaluate", None)
         if evaluate is None:
-            return "default"
-
+            return {}
         try:
-            metadata = await evaluate(
+            value = await evaluate(
                 """element => {
                     const style = window.getComputedStyle(element);
                     return {
                         tagName: element.tagName,
                         type: element.getAttribute("type") || "",
+                        name: element.getAttribute("name") || "",
+                        id: element.getAttribute("id") || "",
                         role: element.getAttribute("role") || "",
                         href: element.getAttribute("href") || "",
                         cursor: style.cursor || "",
@@ -347,9 +623,43 @@ class BrowserFrameRenderer:
                 }"""
             )
         except Exception:
-            return "default"
+            return {}
 
-        return self._cursor_kind_from_metadata(metadata)
+        return value if isinstance(value, dict) else {}
+
+    async def _is_nonvisual_action_target(self, page, shot: VideoShot) -> bool:
+        locator = page.locator(shot.selector)
+        try:
+            count = await locator.count()
+        except Exception:
+            return False
+
+        for index in range(min(count, 5)):
+            metadata = await self._element_metadata(locator.nth(index))
+            if self._metadata_is_nonvisual_target(metadata):
+                return True
+        return False
+
+    def _metadata_is_nonvisual_target(self, metadata: dict) -> bool:
+        tag = str(metadata.get("tagName") or metadata.get("tag") or "").lower()
+        input_type = str(metadata.get("type") or "").lower()
+        name = str(metadata.get("name") or "").lower()
+        element_id = str(metadata.get("id") or "").lower()
+
+        if tag == "input" and input_type == "hidden":
+            return True
+
+        technical_names = {
+            "authenticity_token",
+            "csrf",
+            "csrf_token",
+            "webauthn-support",
+        }
+        return tag == "input" and (
+            name in technical_names
+            or element_id in technical_names
+            or name.startswith("_")
+        )
 
     def _cursor_kind_from_metadata(self, metadata) -> CursorKind:
         if not isinstance(metadata, dict):
@@ -386,18 +696,52 @@ class BrowserFrameRenderer:
 
         return "default"
 
+    def _visible_click_point(self, target: Rect) -> Point:
+        viewport_right = float(self.config.width)
+        viewport_bottom = float(self.config.height)
+        visible_left = max(0.0, target.x)
+        visible_top = max(0.0, target.y)
+        visible_right = min(viewport_right, target.x + target.width)
+        visible_bottom = min(viewport_bottom, target.y + target.height)
+
+        if visible_right > visible_left and visible_bottom > visible_top:
+            return Point(
+                (visible_left + visible_right) / 2.0,
+                (visible_top + visible_bottom) / 2.0,
+            )
+
+        return Point(
+            min(max(target.center.x, 0.0), max(0.0, viewport_right - 1.0)),
+            min(max(target.center.y, 0.0), max(0.0, viewport_bottom - 1.0)),
+        )
+
+    def _cursor_kind_for_position(
+        self,
+        cursor_kind: CursorKind,
+        cursor: Point,
+        target: Rect,
+    ) -> CursorKind:
+        if cursor_kind != "hand":
+            return cursor_kind
+
+        inside_x = target.x <= cursor.x <= target.x + target.width
+        inside_y = target.y <= cursor.y <= target.y + target.height
+        return "hand" if inside_x and inside_y else "default"
+
     async def _perform_typing_action(
         self,
         page,
         shot: VideoShot,
+        locator,
         target: Rect,
         cursor: Point,
         cursor_kind: CursorKind,
         shot_index: int,
     ):
         frames = []
-        locator = page.locator(shot.selector).first
-        await locator.click(timeout=5000)
+        if locator is None:
+            locator, _ = await self._visible_locator_for(page, shot)
+        await self._click_at(page, locator, cursor)
         try:
             await locator.fill("", timeout=3000)
         except Exception:
@@ -421,22 +765,273 @@ class BrowserFrameRenderer:
                 cursor,
                 zoom_progress=1.0,
                 caret_visible=typed_frame.caret_visible,
-                cursor_kind=cursor_kind,
+                cursor_kind=self._cursor_kind_for_position(
+                    cursor_kind,
+                    cursor,
+                    target,
+                ),
             )
             repeats = max(1, self._scaled_frame_count(0.08))
             frames.extend([frame.copy() for _ in range(repeats)])
+        await self._wait_for_page_stability(page)
         return frames
 
-    async def _perform_non_typing_action(self, page, shot: VideoShot) -> None:
-        locator = page.locator(shot.selector).first
+    async def _perform_non_typing_action(
+        self,
+        page,
+        shot: VideoShot,
+        locator,
+        click_point: Point,
+    ) -> None:
+        if locator is None:
+            locator, _ = await self._visible_locator_for(page, shot)
         action_type = shot.action_type.lower()
-        if action_type in {"select", "option"} and shot.value is not None:
-            await locator.select_option(shot.value, timeout=5000)
-        else:
-            await locator.click(timeout=5000)
+        metadata = await self._element_metadata(locator)
+        is_native_select = str(metadata.get("tagName") or "").lower() == "select"
+        metadata_unavailable = not metadata
+
+        await self._click_at(page, locator, click_point)
+
+        if (
+            action_type in {"select", "option"}
+            and shot.value is not None
+            and (is_native_select or metadata_unavailable)
+        ):
+            try:
+                await locator.select_option(shot.value, timeout=5000)
+            except Exception:
+                if is_native_select:
+                    raise
         await self._wait_for_page_stability(page)
 
+    async def _perform_nonvisual_action(self, page, shot: VideoShot) -> None:
+        locator = page.locator(shot.selector)
+        if await locator.count() == 0:
+            raise ValueError(
+                f"Selector {shot.selector!r} did not match for transition "
+                f"{shot.transition_id}"
+            )
+
+        action_type = shot.action_type.lower()
+        target = locator.first
+        if shot.value is not None and (
+            shot.has_typing or action_type in {"select", "option"}
+        ):
+            await self._set_nonvisual_value(target, shot.value)
+        elif action_type in {"click", "press", "tap"}:
+            await self._click_nonvisual(target)
+
+        await self._wait_for_page_stability(page)
+
+    async def _perform_missing_selector_action(
+        self,
+        page,
+        shot: VideoShot,
+        exc: ValueError,
+    ) -> bool:
+        if "did not match" not in str(exc):
+            return False
+
+        action_type = shot.action_type.lower()
+        if action_type not in {"", "click", "press", "tap"}:
+            return False
+
+        href = self._href_from_selector(shot.selector)
+        if not href:
+            return False
+
+        await self._navigate_to_href(page, href)
+        return True
+
+    async def _press_enter_to_materialize_result(
+        self,
+        page,
+        next_shot: VideoShot,
+    ) -> None:
+        if not self._href_from_selector(next_shot.selector):
+            return
+
+        keyboard = getattr(page, "keyboard", None)
+        press = getattr(keyboard, "press", None)
+        if press is None:
+            return
+
+        try:
+            await press("Enter")
+        except Exception:
+            return
+
+        await self._wait_for_page_stability(page)
+
+    async def _navigate_to_href(self, page, href: str) -> None:
+        current_url = await self._current_page_url(page)
+        target_url = urljoin(current_url, href)
+        await page.goto(target_url, wait_until="load", timeout=30000)
+        await self._wait_for_page_stability(page)
+
+    async def _current_page_url(self, page) -> str:
+        url = getattr(page, "url", "")
+        if isinstance(url, str) and url:
+            return url
+
+        evaluate = getattr(page, "evaluate", None)
+        if evaluate is None:
+            return ""
+
+        try:
+            value = await evaluate("() => window.location.href")
+        except Exception:
+            return ""
+
+        return value if isinstance(value, str) else ""
+
+    async def _set_nonvisual_value(self, locator, value: str) -> None:
+        evaluate = getattr(locator, "evaluate", None)
+        if evaluate is None:
+            return
+
+        try:
+            await evaluate(
+                """(element, value) => {
+                    if ("value" in element) {
+                        element.value = value;
+                    }
+                    element.setAttribute("value", value);
+                    element.dispatchEvent(new Event("input", { bubbles: true }));
+                    element.dispatchEvent(new Event("change", { bubbles: true }));
+                }""",
+                value,
+            )
+        except Exception:
+            pass
+
+    async def _click_nonvisual(self, locator) -> None:
+        await self._dispatch_dom_click(locator)
+
+    async def _click_at(self, page, locator, point: Point) -> None:
+        mouse = getattr(page, "mouse", None)
+        mouse_click = getattr(mouse, "click", None)
+        if mouse_click is not None:
+            mouse_move = getattr(mouse, "move", None)
+            if mouse_move is not None:
+                await mouse_move(point.x, point.y)
+            await mouse_click(point.x, point.y)
+            return
+
+        await locator.click(timeout=5000)
+
+    async def _click_locator_direct(
+        self,
+        page,
+        locator,
+        target: Rect,
+        point: Point,
+    ) -> None:
+        click = getattr(locator, "click", None)
+        position = {
+            "x": min(max(point.x - target.x, 0.0), max(1.0, target.width)),
+            "y": min(max(point.y - target.y, 0.0), max(1.0, target.height)),
+        }
+        if click is not None:
+            if await self._try_locator_click(click, position, force=False):
+                return
+            if await self._try_locator_click(click, position, force=True):
+                return
+
+        if await self._dispatch_dom_click(locator):
+            return
+
+        await self._activate_locator_with_keyboard(page, locator)
+
+    async def _try_locator_click(
+        self,
+        click,
+        position: dict[str, float],
+        force: bool,
+    ) -> bool:
+        kwargs = {
+            "position": position,
+            "timeout": 1800,
+        }
+        if force:
+            kwargs["force"] = True
+
+        try:
+            await click(**kwargs)
+            return True
+        except TypeError:
+            try:
+                await click(timeout=1800, force=force)
+                return True
+            except TypeError:
+                try:
+                    await click(timeout=1800)
+                    return True
+                except Exception:
+                    return False
+            except Exception:
+                return False
+        except Exception:
+            return False
+
+    async def _dispatch_dom_click(self, locator) -> bool:
+        evaluate = getattr(locator, "evaluate", None)
+        if evaluate is None:
+            return False
+
+        try:
+            return bool(
+                await evaluate(
+                    """element => {
+                        const options = {
+                            bubbles: true,
+                            cancelable: true,
+                            view: window
+                        };
+                        element.dispatchEvent(new PointerEvent("pointerdown", options));
+                        element.dispatchEvent(new MouseEvent("mousedown", options));
+                        element.dispatchEvent(new PointerEvent("pointerup", options));
+                        element.dispatchEvent(new MouseEvent("mouseup", options));
+                        element.dispatchEvent(new MouseEvent("click", options));
+                        if (typeof element.click === "function") {
+                            element.click();
+                        }
+                        return true;
+                    }"""
+                )
+            )
+        except Exception:
+            return False
+
+    async def _activate_locator_with_keyboard(
+        self,
+        page,
+        locator,
+    ) -> None:
+        focus = getattr(locator, "focus", None)
+        if focus is not None:
+            try:
+                await focus(timeout=1000)
+            except TypeError:
+                try:
+                    await focus()
+                except Exception:
+                    pass
+            except Exception:
+                pass
+
+        keyboard = getattr(page, "keyboard", None)
+        press = getattr(keyboard, "press", None)
+        if press is None:
+            return
+
+        try:
+            await press("Enter")
+        except Exception:
+            pass
+
     async def _wait_for_page_stability(self, page) -> None:
+        await self._wait_for_timeout(page, 150)
         try:
             await page.wait_for_load_state("networkidle", timeout=5000)
         except PlaywrightTimeoutError:
@@ -466,7 +1061,11 @@ class BrowserFrameRenderer:
                 target,
                 cursor,
                 zoom_progress=0.0,
-                cursor_kind=cursor_kind,
+                cursor_kind=self._cursor_kind_for_position(
+                    cursor_kind,
+                    cursor,
+                    target,
+                ),
             )
             for _ in range(count)
         ]
@@ -492,7 +1091,11 @@ class BrowserFrameRenderer:
                     target,
                     cursor,
                     zoom_progress=progress,
-                    cursor_kind=cursor_kind,
+                    cursor_kind=self._cursor_kind_for_position(
+                        cursor_kind,
+                        cursor,
+                        target,
+                    ),
                 )
             )
         return frames
@@ -512,6 +1115,11 @@ class BrowserFrameRenderer:
             fraction = (index + 1) / count
             cursor = curved_cursor_path(start, end, fraction)
             cursor_kind = end_cursor_kind if fraction > 0.82 else start_cursor_kind
+            cursor_kind = self._cursor_kind_for_position(
+                cursor_kind,
+                cursor,
+                target,
+            )
             frames.append(
                 self._compose_frame(
                     image,
@@ -549,6 +1157,11 @@ class BrowserFrameRenderer:
                 if fraction > 0.82
                 else start_scene.cursor_kind
             )
+            cursor_kind = self._cursor_kind_for_position(
+                cursor_kind,
+                cursor,
+                target,
+            )
             frames.append(
                 self._compose_frame(
                     blended,
@@ -581,7 +1194,11 @@ class BrowserFrameRenderer:
                     cursor,
                     zoom_progress=1.0,
                     cursor_press=press,
-                    cursor_kind=cursor_kind,
+                    cursor_kind=self._cursor_kind_for_position(
+                        cursor_kind,
+                        cursor,
+                        target,
+                    ),
                 )
             )
         return frames
@@ -600,7 +1217,11 @@ class BrowserFrameRenderer:
                 target,
                 cursor,
                 zoom_progress=1.0,
-                cursor_kind=cursor_kind,
+                cursor_kind=self._cursor_kind_for_position(
+                    cursor_kind,
+                    cursor,
+                    target,
+                ),
             )
             for _ in range(count)
         ]
@@ -692,6 +1313,7 @@ class BrowserFrameRenderer:
     ):
         from PIL import Image
 
+        cursor_kind = self._cursor_kind_for_position(cursor_kind, cursor, target)
         params = self._window_params
         transform = window_transform_for_progress(params, target, zoom_progress)
 

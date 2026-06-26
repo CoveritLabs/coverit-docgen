@@ -2,23 +2,27 @@ import json
 from enum import Enum
 from typing import Any
 from dataclasses import dataclass
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class StepType(str, Enum):
     STATE = "STATE"
     TRANSITION = "TRANSITION"
+    DESIGN_CLASS = "DESIGN_CLASS"
     ASSERTION = "ASSERTION"
     ACTION_HOOK = "ACTION_HOOK"
 
 
 class FlowEditorStepKind(str, Enum):
     DESIGN_CLASS = "design-class"
-    DESIGN_OPERATION = "design-operation"
     ASSERTION = "assertion"
     ACTION_HOOK = "action-hook"
-    GROUP = "group"
 
+FLOW_TO_STEP_TYPE = {
+    FlowEditorStepKind.DESIGN_CLASS: StepType.DESIGN_CLASS,
+    FlowEditorStepKind.ASSERTION: StepType.ASSERTION,
+    FlowEditorStepKind.ACTION_HOOK: StepType.ACTION_HOOK,
+}
 
 class FlowEditorPositionEdge(str, Enum):
     BEFORE = "before"
@@ -67,6 +71,23 @@ class BddFlowInput(BaseModel):
         if any(not transition_id.strip() for transition_id in value):
             raise ValueError("transition_ids cannot contain empty values")
         return value
+
+    @model_validator(mode="after")
+    def validate_editor_step_positions(self) -> "BddFlowInput":
+        transition_ids = set(self.transition_ids)
+        unknown = sorted(
+            {
+                step.position.transitionId
+                for step in self.editor_steps
+                if step.position.transitionId not in transition_ids
+            }
+        )
+        if unknown:
+            raise ValueError(
+                "editor_steps reference transition ids outside transition_ids: "
+                + ", ".join(unknown)
+            )
+        return self
 
 
 class BddGenerationInput(BaseModel):
@@ -192,6 +213,7 @@ class ResolvedFlow(BaseModel):
     flow_id: str | None = None
     checkpoint: ResolvedState
     transitions: list[ResolvedTransition]
+    editor_steps: list[FlowEditorDraftStep] = Field(default_factory=list)
 
 
 class StepPlan(BaseModel):
@@ -223,7 +245,6 @@ class SemanticAssertion(BaseModel):
     definition: dict[str, Any]
     semantic: dict[str, Any] = Field(default_factory=dict)
 
-
 @dataclass(frozen=True)
 class CompiledFeature:
     id: str
@@ -239,6 +260,4 @@ class CompiledBdd:
     transitions: dict[str, dict]
     assertions: dict[str, dict]
     action_hooks: dict[str, dict]
-    design_class: dict[str, Any] | None = None
-    feature_name: str | None = None
-    feature_text: str | None = None
+    design_classes: dict[str, dict] | None = None

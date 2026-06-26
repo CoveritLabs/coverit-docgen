@@ -10,7 +10,7 @@ from src.core.neo import neo_manager
 from src.models.bdd import BddGenerationInput
 from src.repositories.bdd_repo import BddRepository
 from src.services.assertions import SemanticAssertionService
-from src.services.bdd.regression import compile_bdd, scenario_names_for_flows
+from src.services.bdd.regression import compile_bdd
 
 settings = get_settings()
 logger = logging.getLogger("arq.worker.bdd")
@@ -67,6 +67,7 @@ async def task_generate_bdd(ctx: dict, payload: dict) -> dict:
     graph_id = payload.get("graph_id") if isinstance(payload, dict) else None
     try:
         request = BddGenerationInput.model_validate(payload)
+        print(request)
         graph_id = request.graph_id
         job_try = int(ctx.get("job_try", 1))
         flow_ids = list(
@@ -155,22 +156,13 @@ async def task_generate_bdd(ctx: dict, payload: dict) -> dict:
                 graph_id,
                 state_hashes,
             )
-
-        semantic_assertions_by_flow_index = await SemanticAssertionService(
-            settings
-        ).generate(
-            flows,
-            scenario_names_for_flows(flows),
-        )
-
-        compiled = compile_bdd(
+        
+        compiled = await compile_bdd(
             flows,
             outgoing_locators,
-            semantic_assertions_by_flow_index=semantic_assertions_by_flow_index,
-            split_features=settings.bdd_split_features,
-            feature_similarity_threshold=settings.bdd_feature_similarity_threshold,
-            singleton_merge_threshold=settings.bdd_singleton_merge_threshold,
+            SemanticAssertionService(settings),
         )
+
         logger.info(
             f"[BDD:{graph_id}] Generated {len(compiled.features)} feature(s) "
             f"with {len(flows)} scenarios"
@@ -192,9 +184,14 @@ async def task_generate_bdd(ctx: dict, payload: dict) -> dict:
             "states": compiled.states,
             "transitions": compiled.transitions,
             "assertions": compiled.assertions,
-            "action_hooks": {},
+            "action_hooks": compiled.action_hooks,
+            "design_classes": compiled.design_classes,
             "flow_ids": flow_ids,
         }
+
+        if compiled.features:
+            result_payload["feature_name"] = compiled.features[0].feature_name
+            result_payload["feature_text"] = compiled.features[0].feature_text
 
         if request.regression_codebase_id:
             result_payload["regression_codebase_id"] = request.regression_codebase_id
@@ -202,11 +199,8 @@ async def task_generate_bdd(ctx: dict, payload: dict) -> dict:
         if request.codegen_config:
             result_payload["codegen_config"] = request.codegen_config
 
-        if compiled.feature_name is not None and compiled.feature_text is not None:
-            result_payload["feature_name"] = compiled.feature_name
-            result_payload["feature_text"] = compiled.feature_text
-
         save_result_payload(result_payload, "artifacts")
+
         await _enqueue_bullmq_job(
             ctx["redis"],
             BULLMQ_QUEUE,

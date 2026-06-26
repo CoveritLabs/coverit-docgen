@@ -216,3 +216,5 @@ __marimo__/
 .env.*.local
 .env.*
 !.env.example
+
+logs/*
