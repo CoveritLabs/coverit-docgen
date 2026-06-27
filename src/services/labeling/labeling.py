@@ -7,7 +7,7 @@ from src.utils.html_tools import (
     center,
     get_bbox,
 )
-from src.services.labeling.constants import MAX_DEPTH, NAME_ATTRS
+from src.services.labeling.constants import MAX_DEPTH, NAME_ATTRS, HUMAN_READABLE_TYPES
 from src.core.config import get_settings
 
 settings = get_settings()
@@ -207,6 +207,10 @@ class Labeling:
             return {"text": name, "type": tag.get("role") or tag.name or "text"}
 
         return None
+    
+    @staticmethod
+    def _humanize_element_type(element_type: str) -> str:
+        return HUMAN_READABLE_TYPES.get(element_type.lower(), "element")
 
     def _get_name_from_context(self, el: Tag, root: Tag) -> str | None:
         """Describe an unnamed element by nearby context or screen position.
@@ -314,7 +318,8 @@ class Labeling:
             normalized_dy = abs(best["dy"]) / root_box["height"]
             if max(normalized_dx, normalized_dy) <= settings.context_distance_threshold:
                 direction = self._relative_direction(best["dx"], best["dy"])
-                return f"{direction} the {best['type']} '{best['text']}'"
+                human_type = self._humanize_element_type(best["type"])
+                return f"{direction} the {human_type} '{best['text']}'"
 
         normalized_x = min(1.0, max(0.0, (tx - root_box["x"]) / root_box["width"]))
         normalized_y = min(1.0, max(0.0, (ty - root_box["y"]) / root_box["height"]))
